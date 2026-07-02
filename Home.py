@@ -7,12 +7,18 @@ st.set_page_config(page_title="HisaabKitaab", page_icon="📒", layout="centered
 apply_styles()
 restore_login()
 
-# Handle Google OAuth callback
-query_params = st.query_params
-if "code" in query_params and not st.session_state.get("user"):
-    with st.spinner("Signing you in..."):
-        handle_callback(query_params["code"])
+# Step 1: capture code from URL into session state, then clear URL
+if "code" in st.query_params and not st.session_state.get("auth_code"):
+    st.session_state.auth_code = st.query_params["code"]
     st.query_params.clear()
+    st.rerun()
+
+# Step 2: process the saved code exactly once
+if st.session_state.get("auth_code") and not st.session_state.get("user"):
+    code = st.session_state.auth_code
+    del st.session_state.auth_code
+    with st.spinner("Signing you in..."):
+        handle_callback(code)
     st.rerun()
 
 if not st.session_state.get("user"):
