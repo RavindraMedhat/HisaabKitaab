@@ -1,0 +1,7 @@
+streamlit
+firebase-admin
+google-auth-oauthlib
+google-auth
+python-dotenv
+requests
+extra-streamlit-components
