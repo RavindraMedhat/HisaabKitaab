@@ -1,0 +1,8 @@
+.env
+serviceAccountKey.json
+.git
+__pycache__
+*.pyc
+.streamlit
+generate_secrets.py
+README.md

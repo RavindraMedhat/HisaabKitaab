@@ -1,7 +1,8 @@
-streamlit
+fastapi
+uvicorn[standard]
 firebase-admin
 google-auth-oauthlib
 google-auth
 python-dotenv
-requests
-extra-streamlit-components
+itsdangerous
+starlette
