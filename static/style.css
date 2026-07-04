@@ -516,6 +516,110 @@ html, body {
   justify-content: center;
 }
 
+/* ── FAB (floating action button) ───────────────────────────────────────── */
+.fab {
+  position: fixed;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + .9rem);
+  /* stay inside the centered 430px page on any screen width */
+  right: max(1rem, calc((100vw - 430px) / 2 + 1rem));
+  height: 3rem;
+  padding: 0 1.1rem;
+  border-radius: 2rem;
+  background: linear-gradient(135deg, #FF6B2B, #FF9850);
+  color: #fff;
+  font-size: .9rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+  border: none;
+  box-shadow: 0 6px 20px rgba(255,107,43,.5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  z-index: 110;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .12s, box-shadow .12s;
+}
+.fab-icon { font-size: 1.3rem; font-weight: 400; line-height: 1; }
+.fab:active { transform: scale(.93); box-shadow: 0 2px 8px rgba(255,107,43,.35); }
+
+/* hide nav center + button when group FAB is present */
+.has-fab .nav-add-wrap { visibility: hidden; }
+
+/* ── Header more button ──────────────────────────────────────────────────── */
+.btn-more {
+  width: 2rem; height: 2rem;
+  border-radius: 50%;
+  background: var(--bg);
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: .05em;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Member chips ────────────────────────────────────────────────────────── */
+.member-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  padding: .25rem 1rem .85rem;
+}
+.member-chip {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: .28rem .6rem .28rem .28rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,.07);
+  font-size: .82rem;
+  font-weight: 600;
+}
+.chip-remove {
+  width: 1.1rem; height: 1.1rem;
+  border-radius: 50%;
+  background: var(--neg-lt);
+  color: var(--neg);
+  border: none;
+  font-size: .75rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: .1rem;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Group menu items ────────────────────────────────────────────────────── */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  padding: .85rem .5rem;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--sep);
+  font-size: .97rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.menu-item:last-child { border-bottom: none; }
+.menu-item:active { background: var(--bg); }
+.menu-item-icon { font-size: 1.1rem; width: 1.5rem; text-align: center; }
+
 /* ── Nav badge (invite count) ────────────────────────────────────────────── */
 .nav-icon-wrap {
   position: relative;

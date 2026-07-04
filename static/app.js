@@ -348,13 +348,12 @@ async function viewGroup(gid) {
   else if (my_balance < -0.01) { bannerCls = 'banner-neg'; bannerLabel = 'You owe'; }
   else                          { bannerCls = 'banner-nil'; bannerLabel = 'All settled up'; }
 
-  // Settle up rows (only transactions involving me)
+  // Settle up rows (only my transactions)
   const myTxns = transactions.filter(t => t.from_uid === uid || t.to_uid === uid);
   const settleRows = myTxns.map((t, i) => {
-    const paying = t.from_uid === uid;
-    const who    = paying ? t.to_name : t.from_name;
-    const label  = paying
-      ? `You owe <strong>${esc(who)}</strong>`
+    const paying  = t.from_uid === uid;
+    const label   = paying
+      ? `You owe <strong>${esc(paying ? t.to_name : t.from_name)}</strong>`
       : `<strong>${esc(t.from_name)}</strong> owes you`;
     const amtHtml = paying
       ? `<span class="amt neg">−${fmt(t.amount)}</span>`
@@ -370,20 +369,10 @@ async function viewGroup(gid) {
       </div>`;
   }).join('');
 
-  // Members — creator sees × remove button on other members
-  const memberRows = members.map(m => `
-    <div class="hk-row">
-      ${av(m.name)}
-      <div class="flex1 fw700">${esc(m.name)}${m.uid === uid ? ' <span class="muted">(you)</span>' : ''}</div>
-      ${is_creator && m.uid !== uid
-        ? `<button class="btn-icon-danger" onclick="removeMember('${gid}','${m.uid}','${esc(m.name)}')" title="Remove">×</button>`
-        : ''}
-    </div>`).join('');
-
-  // Expense rows — tap left side for detail, edit icon for creator or payer
+  // Expense rows — tap for detail, ✏ for edit
   const expRows = expenses.map(e => {
-    const split = e.split_among || [];
-    const share = split.length ? e.amount / split.length : 0;
+    const split    = e.split_among || [];
+    const share    = split.length ? e.amount / split.length : 0;
     const paidName = members.find(m => m.uid === e.paid_by)?.name || '?';
     let myPart = '';
     if (e.paid_by === uid)        myPart = `<span class="amt pos">+${fmt(e.amount - (split.includes(uid) ? share : 0))}</span>`;
@@ -402,23 +391,21 @@ async function viewGroup(gid) {
       </div>`;
   }).join('');
 
-  // Creator sees Delete Group; non-creator sees Leave Group
-  const dangerZone = is_creator
-    ? `<div style="padding:.25rem 1rem 1.25rem">
-         <button class="btn btn-danger" onclick="deleteGroup('${gid}')">Delete Group</button>
-       </div>`
-    : `<div style="padding:.25rem 1rem 1.25rem">
-         <button class="btn btn-danger-outline" onclick="leaveGroup('${gid}')">Leave Group</button>
-       </div>`;
-
   render(`
-  <div class="page">
+  <div class="page has-fab">
     <div class="hk-header">
       <button class="btn-back" onclick="go('#/groups')">‹</button>
-      <div class="hk-title">${esc(name)}</div>
+      <div class="flex1">
+        <div class="hk-title" style="font-size:1rem">${esc(name)}</div>
+        <div class="muted" style="font-size:.72rem;margin-top:1px;cursor:pointer" onclick="openMembersSheet('${gid}')">
+          👥 ${members.length} member${members.length !== 1 ? 's' : ''} · tap to view
+        </div>
+      </div>
+      <button class="btn-more" onclick="openGroupMenu('${gid}')">⋯</button>
     </div>
     <div class="page-body">
-      <div class="hk-banner ${bannerCls}">
+
+      <div class="hk-banner ${bannerCls}" style="margin-top:.6rem">
         <div>
           <div class="banner-label">${bannerLabel}</div>
           <div class="banner-amount">${Math.abs(my_balance) < 0.01 ? 'All clear' : fmt(my_balance)}</div>
@@ -429,44 +416,145 @@ async function viewGroup(gid) {
       ${myTxns.length ? `
         <div class="hk-section">Settle Up</div>
         <div class="hk-group" style="padding:.1rem 1rem">${settleRows}</div>
-      ` : transactions.length === 0 ? `
-        <div style="text-align:center;padding:.75rem;font-weight:700;color:var(--pos);font-size:.9rem">
-          🎉 Everyone is settled up!
+      ` : transactions.length === 0 && expenses.length === 0 ? '' : `
+        <div style="padding:.3rem 1rem .1rem;font-size:.78rem;font-weight:700;color:var(--pos)">
+          🎉 All settled up
         </div>
-      ` : ''}
-
-      <div class="hk-section">Members</div>
-      <div class="hk-group">${memberRows}</div>
-
-      ${is_creator ? `
-      <div style="padding:0 1rem .75rem">
-        <details style="background:var(--surface);border-radius:var(--r);padding:.75rem 1rem;
-                        box-shadow:0 1px 4px rgba(0,0,0,.05)">
-          <summary style="font-weight:700;cursor:pointer;color:var(--neg)">+ Invite Member</summary>
-          <div style="padding-top:.75rem">
-            <input id="mem-email" class="form-input" placeholder="friend@example.com" type="email" style="margin-bottom:.5rem">
-            <button class="btn btn-ghost" onclick="addMember('${gid}')">Send Invite</button>
-          </div>
-        </details>
-      </div>` : ''}
+      `}
 
       <div class="hk-section">Expenses</div>
       ${expenses.length
         ? `<div class="hk-group">${expRows}</div>`
-        : `<div class="empty" style="padding:1.25rem">
-             <div class="empty-sub">No expenses yet. Add one with the + button.</div>
+        : `<div class="empty" style="padding:3rem 1rem">
+             <div class="empty-icon">🧾</div>
+             <div class="empty-title">No expenses yet</div>
+             <div class="empty-sub">Tap the + button to add the first expense.</div>
            </div>`}
 
-      <div style="padding:.25rem 1rem .5rem">
-        <button class="btn btn-primary" onclick="go('#/add?group=${gid}')">+ Add Expense</button>
-      </div>
-
-      ${dangerZone}
+      <div style="height:6rem"></div>
     </div>
+
+    <button class="fab" onclick="go('#/add?group=${gid}')"><span class="fab-icon">＋</span> Add Expense</button>
     ${nav('groups')}
   </div>`);
 
   window.__settleData = { gid, txns: myTxns, uid };
+}
+
+function openGroupMenu(gid) {
+  const g = window.__groupData;
+  if (!g) return;
+  const { is_creator, name } = g;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title" style="margin-bottom:.75rem">${esc(name)}</div>
+
+      <button class="menu-item" onclick="this.closest('.modal-overlay').remove(); openMembersSheet('${gid}')">
+        <span class="menu-item-icon">👥</span> View Members
+      </button>
+
+      ${is_creator ? `
+        <button class="menu-item" onclick="openInviteSheet('${gid}')">
+          <span class="menu-item-icon">📨</span> Invite Member
+        </button>` : ''}
+
+      <button class="menu-item" onclick="this.closest('.modal-overlay').remove(); ${
+        is_creator
+          ? `deleteGroup('${gid}')`
+          : `leaveGroup('${gid}')`
+      }" style="color:var(--neg)">
+        <span class="menu-item-icon">${is_creator ? '🗑' : '🚪'}</span>
+        ${is_creator ? 'Delete Group' : 'Leave Group'}
+      </button>
+
+      <button class="menu-item" onclick="this.closest('.modal-overlay').remove()" style="margin-top:.25rem;color:var(--muted)">
+        <span class="menu-item-icon">✕</span> Cancel
+      </button>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+function openMembersSheet(gid) {
+  const g = window.__groupData;
+  if (!g) return;
+  const { members, is_creator } = g;
+
+  const rows = members.map(m => `
+    <div style="display:flex;align-items:center;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border)">
+      <div style="width:2.2rem;height:2.2rem;border-radius:50%;background:var(--neg-lt);flex-shrink:0;
+                  display:flex;align-items:center;justify-content:center;font-weight:700;
+                  color:var(--neg);font-size:.88rem">
+        ${esc(m.name.charAt(0).toUpperCase())}
+      </div>
+      <div class="flex1 trunc" style="font-weight:600;font-size:.95rem">${esc(m.name)}</div>
+      ${m.uid === g.uid
+        ? `<span style="font-size:.72rem;color:var(--muted);flex-shrink:0">you</span>`
+        : is_creator
+          ? `<button style="flex-shrink:0;background:none;border:1.5px solid var(--neg);color:var(--neg);
+                            font-size:.72rem;font-weight:700;border-radius:.5rem;padding:.2rem .55rem;cursor:pointer"
+               onclick="removeMemberFromSheet('${gid}','${m.uid}','${esc(m.name)}')">Remove</button>`
+          : ''}
+    </div>`).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">Members (${members.length})</div>
+      <div style="max-height:60vh;overflow-y:auto">${rows}</div>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()" style="margin-top:.75rem;width:100%">Close</button>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+function openInviteSheet(gid) {
+  document.querySelector('.modal-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">Invite Member</div>
+      <div class="form-group" style="padding:0 0 .75rem">
+        <label class="form-label">Email address</label>
+        <input id="invite-email" class="form-input" type="email" placeholder="friend@example.com">
+      </div>
+      <div class="modal-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" id="send-invite-btn" onclick="sendInviteFromSheet('${gid}')">Send Invite</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  setTimeout(() => overlay.querySelector('#invite-email')?.focus(), 100);
+}
+
+async function sendInviteFromSheet(gid) {
+  const email = document.getElementById('invite-email')?.value.trim();
+  if (!email) { toast('Enter an email address'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid email address'); return; }
+  const btn = document.getElementById('send-invite-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await api('POST', `/api/groups/${gid}/members`, { email });
+    document.querySelector('.modal-overlay')?.remove();
+    toast('Invite sent!');
+    viewGroup(gid);
+  } catch (e) {
+    toast(e.message);
+    if (btn) btn.disabled = false;
+  }
 }
 
 function openSettle(idx) {
@@ -530,6 +618,16 @@ async function addMember(gid) {
 }
 
 // #18 — creator removes a member
+async function removeMemberFromSheet(gid, memberUid, memberName) {
+  if (!confirm(`Remove ${memberName} from this group?`)) return;
+  document.querySelector('.modal-overlay')?.remove();
+  try {
+    await api('DELETE', `/api/groups/${gid}/members/${memberUid}`);
+    toast(`${memberName} removed`);
+    viewGroup(gid);
+  } catch (e) { toast(e.message); }
+}
+
 async function removeMember(gid, memberUid, memberName) {
   if (!confirm(`Remove ${memberName} from this group?`)) return;
   try {
