@@ -1,12 +1,10 @@
 import os
-import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SCOPES = [
@@ -20,13 +18,10 @@ def _redirect_uri(request: Request) -> str:
     override = os.getenv("REDIRECT_URI")
     if override:
         return override
-    # Render and most proxies set x-forwarded-proto; fall back to ENV check
     proto = request.headers.get("x-forwarded-proto") \
          or ("https" if os.getenv("ENV") == "production" else request.url.scheme)
     host  = request.headers.get("host", "localhost:7485")
-    uri   = f"{proto}://{host}/auth/callback"
-    import logging; logging.warning(f"[auth] redirect_uri={uri}")
-    return uri
+    return f"{proto}://{host}/auth/callback"
 
 
 def _flow(redirect_uri: str) -> Flow:
@@ -68,6 +63,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         log_error("OAuth state mismatch", expected_present=bool(expected), state_present=bool(state))
         return RedirectResponse("/?auth_error=1")
 
+    uri = "unknown"
     try:
         uri  = request.session.pop("redirect_uri", None) or _redirect_uri(request)
         flow = _flow(uri)
@@ -79,7 +75,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
             os.getenv("GOOGLE_CLIENT_ID"),
         )
     except Exception as e:
-        log_error("OAuth token exchange failed", exc=e, redirect_uri=uri if 'uri' in dir() else "unknown")
+        log_error("OAuth token exchange failed", exc=e, redirect_uri=uri)
         return RedirectResponse("/?auth_error=1")
 
     user = {
