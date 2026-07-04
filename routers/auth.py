@@ -1,4 +1,7 @@
 import os
+import hashlib
+import base64
+import secrets
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
@@ -12,6 +15,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
+
+
+def _pkce_pair():
+    verifier  = secrets.token_urlsafe(64)
+    digest    = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
+    return verifier, challenge
 
 
 def _redirect_uri(request: Request) -> str:
@@ -42,11 +52,19 @@ def _flow(redirect_uri: str) -> Flow:
 
 @router.get("/login")
 async def login(request: Request):
-    uri  = _redirect_uri(request)
-    flow = _flow(uri)
-    auth_url, state = flow.authorization_url(prompt="select_account")
-    request.session["oauth_state"]  = state
-    request.session["redirect_uri"] = uri
+    uri               = _redirect_uri(request)
+    flow              = _flow(uri)
+    verifier, challenge = _pkce_pair()
+
+    auth_url, state = flow.authorization_url(
+        prompt="select_account",
+        code_challenge=challenge,
+        code_challenge_method="S256",
+    )
+
+    request.session["oauth_state"]    = state
+    request.session["redirect_uri"]   = uri
+    request.session["code_verifier"]  = verifier
     return RedirectResponse(auth_url)
 
 
@@ -65,9 +83,10 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 
     uri = "unknown"
     try:
-        uri  = request.session.pop("redirect_uri", None) or _redirect_uri(request)
-        flow = _flow(uri)
-        flow.fetch_token(code=code)
+        uri      = request.session.pop("redirect_uri", None)  or _redirect_uri(request)
+        verifier = request.session.pop("code_verifier", None)
+        flow     = _flow(uri)
+        flow.fetch_token(code=code, code_verifier=verifier)
 
         info = id_token.verify_oauth2_token(
             flow.credentials.id_token,
