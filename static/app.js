@@ -380,7 +380,7 @@ async function viewGroup(gid) {
         : ''}
     </div>`).join('');
 
-  // Expense rows — edit icon for creator or payer
+  // Expense rows — tap left side for detail, edit icon for creator or payer
   const expRows = expenses.map(e => {
     const split = e.split_among || [];
     const share = split.length ? e.amount / split.length : 0;
@@ -391,13 +391,13 @@ async function viewGroup(gid) {
     const canEdit = is_creator || e.paid_by === uid;
     return `
       <div class="hk-row">
-        <div class="flex1">
+        <div class="flex1 tap" onclick="openExpenseDetail('${gid}','${e.id}')" style="min-width:0;cursor:pointer">
           <div class="fw700 trunc">${esc(e.description || 'Expense')}</div>
           <div class="muted">${esc(paidName)} paid ${fmt(e.amount)}</div>
         </div>
         <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
           ${myPart}
-          ${canEdit ? `<button class="btn-icon" onclick="openEditExpense('${gid}','${e.id}')" title="Edit">✏</button>` : ''}
+          ${canEdit ? `<button class="btn-icon" onclick="event.stopPropagation();openEditExpense('${gid}','${e.id}')" title="Edit">✏</button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -557,6 +557,51 @@ async function deleteGroup(gid) {
     toast('Group deleted');
     go('#/groups');
   } catch (e) { toast(e.message); }
+}
+
+// Expense detail modal — any group member can view full breakdown
+function openExpenseDetail(gid, eid) {
+  const g = window.__groupData;
+  if (!g) return;
+  const e = g.expenses.find(x => x.id === eid);
+  if (!e) return;
+
+  const members = g.members;
+  const split   = e.split_among || [];
+  const share   = split.length ? Math.round((e.amount / split.length) * 100) / 100 : 0;
+  const paidName = members.find(m => m.uid === e.paid_by)?.name || '?';
+  const date = e.created_at
+    ? new Date(e.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '';
+
+  const splitRows = split.map(uid => {
+    const name = members.find(m => m.uid === uid)?.name || uid.slice(0, 8);
+    return `
+      <div class="hk-row" style="padding:.55rem 1rem">
+        ${av(name)}
+        <div class="flex1 fw700">${esc(name)}</div>
+        <span class="amt neg">−${fmt(share)}</span>
+      </div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-sheet" style="max-height:85dvh;overflow-y:auto">
+      <div class="modal-handle"></div>
+      <div class="modal-title">${esc(e.description || 'Expense')}</div>
+      <div class="modal-amount">${fmt(e.amount)}</div>
+      <div class="modal-sub">Paid by <strong>${esc(paidName)}</strong>${date ? ' &nbsp;·&nbsp; ' + date : ''}</div>
+      <div class="hk-section" style="padding:.85rem 0 .3rem">
+        Split among ${split.length} person${split.length !== 1 ? 's' : ''} · ${fmt(share)} each
+      </div>
+      <div class="hk-group" style="margin:0 0 1rem">${splitRows}</div>
+      <button class="btn btn-ghost" id="close-detail">Close</button>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('#close-detail').onclick = () => overlay.remove();
+  overlay.addEventListener('click', ev => { if (ev.target === overlay) overlay.remove(); });
 }
 
 // #25 — edit expense modal (pre-filled, PUT request)
