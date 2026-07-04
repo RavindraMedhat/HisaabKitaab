@@ -1,4 +1,5 @@
 .env
+render.env
 serviceAccountKey.json
 .streamlit/
 generate_secrets.py

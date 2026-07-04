@@ -1,10 +1,12 @@
 import os
+import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SCOPES = [
@@ -18,9 +20,13 @@ def _redirect_uri(request: Request) -> str:
     override = os.getenv("REDIRECT_URI")
     if override:
         return override
-    scheme = "https" if request.headers.get("x-forwarded-proto") == "https" else request.url.scheme
-    host   = request.headers.get("host", "localhost:7485")
-    return f"{scheme}://{host}/auth/callback"
+    # Render and most proxies set x-forwarded-proto; fall back to ENV check
+    proto = request.headers.get("x-forwarded-proto") \
+         or ("https" if os.getenv("ENV") == "production" else request.url.scheme)
+    host  = request.headers.get("host", "localhost:7485")
+    uri   = f"{proto}://{host}/auth/callback"
+    import logging; logging.warning(f"[auth] redirect_uri={uri}")
+    return uri
 
 
 def _flow(redirect_uri: str) -> Flow:
@@ -51,15 +57,17 @@ async def login(request: Request):
 
 @router.get("/callback")
 async def callback(request: Request, code: str = None, state: str = None, error: str = None):
+    from services.logger import log_error
+
     if error or not code:
+        log_error("OAuth callback rejected by Google", error=error, code_present=bool(code))
         return RedirectResponse("/?auth_error=1")
 
-    # #1 — CSRF: verify state matches what we stored before redirecting
     expected = request.session.pop("oauth_state", None)
     if not expected or state != expected:
+        log_error("OAuth state mismatch", expected_present=bool(expected), state_present=bool(state))
         return RedirectResponse("/?auth_error=1")
 
-    # #14 — wrap token fetch + id_token verify; both can raise on network/Google errors
     try:
         uri  = request.session.pop("redirect_uri", None) or _redirect_uri(request)
         flow = _flow(uri)
@@ -70,7 +78,8 @@ async def callback(request: Request, code: str = None, state: str = None, error:
             google_requests.Request(),
             os.getenv("GOOGLE_CLIENT_ID"),
         )
-    except Exception:
+    except Exception as e:
+        log_error("OAuth token exchange failed", exc=e, redirect_uri=uri if 'uri' in dir() else "unknown")
         return RedirectResponse("/?auth_error=1")
 
     user = {
