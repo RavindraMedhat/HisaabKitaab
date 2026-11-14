@@ -1,114 +1,64 @@
-import os
-import hashlib
-import base64
+import re
 import secrets
-from fastapi import APIRouter, Request
+from typing import Optional
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
-from google_auth_oauthlib.flow import Flow
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
+from pydantic import BaseModel
+
+from services.firebase import db
 
 router = APIRouter()
 
-SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-]
+UPI_RE = re.compile(r"^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$")
 
 
-def _pkce_pair():
-    verifier  = secrets.token_urlsafe(64)
-    digest    = hashlib.sha256(verifier.encode()).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
-    return verifier, challenge
+def normalize_mobile(raw: str) -> str:
+    """Indian mobile → 10 digits (accepts +91 / 0 prefixes, spaces, dashes)."""
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) > 10:
+        digits = digits[-10:]
+    if not re.fullmatch(r"[6-9]\d{9}", digits):
+        raise HTTPException(400, "Enter a valid 10-digit mobile number")
+    return digits
 
 
-def _redirect_uri(request: Request) -> str:
-    override = os.getenv("REDIRECT_URI")
-    if override:
-        return override
-    proto = request.headers.get("x-forwarded-proto") \
-         or ("https" if os.getenv("ENV") == "production" else request.url.scheme)
-    host  = request.headers.get("host", "localhost:7485")
-    return f"{proto}://{host}/auth/callback"
+class LoginBody(BaseModel):
+    mobile: str
+    password: str
+    name: Optional[str] = None
+    upi: Optional[str] = None
 
 
-def _flow(redirect_uri: str) -> Flow:
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id":     os.getenv("GOOGLE_CLIENT_ID"),
-                "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-                "token_uri":     "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=redirect_uri,
-    )
+@router.post("/login")
+async def login(body: LoginBody, request: Request):
+    mobile = normalize_mobile(body.mobile)
+    password = body.password or ""
+    if len(password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+    ref = db.collection("users").document(mobile)
+    doc = ref.get()
 
+    if doc.exists:
+        user = doc.to_dict()
+        stored = user.get("password")
+        if stored is None:                      # account created before passwords existed
+            ref.set({"password": password}, merge=True)
+        elif not secrets.compare_digest(str(stored).encode(), password.encode()):
+            raise HTTPException(401, "Wrong mobile number or password")
+    else:
+        name = (body.name or "").strip()
+        if not name:
+            return {"needs_name": True}
+        if len(name) > 40:
+            raise HTTPException(400, "Name must be 40 characters or fewer")
+        upi = (body.upi or "").strip()
+        if upi and not UPI_RE.match(upi):
+            raise HTTPException(400, "That doesn't look like a UPI ID (example: name@oksbi)")
+        user = {"uid": mobile, "name": name, "mobile": mobile, "upi": upi, "password": password}
+        ref.set(user)
 
-@router.get("/login")
-async def login(request: Request):
-    uri               = _redirect_uri(request)
-    flow              = _flow(uri)
-    verifier, challenge = _pkce_pair()
-
-    auth_url, state = flow.authorization_url(
-        prompt="select_account",
-        code_challenge=challenge,
-        code_challenge_method="S256",
-    )
-
-    request.session["oauth_state"]    = state
-    request.session["redirect_uri"]   = uri
-    request.session["code_verifier"]  = verifier
-    return RedirectResponse(auth_url)
-
-
-@router.get("/callback")
-async def callback(request: Request, code: str = None, state: str = None, error: str = None):
-    from services.logger import log_error
-
-    if error or not code:
-        log_error("OAuth callback rejected by Google", error=error, code_present=bool(code))
-        return RedirectResponse("/?auth_error=1")
-
-    expected = request.session.pop("oauth_state", None)
-    if not expected or state != expected:
-        log_error("OAuth state mismatch", expected_present=bool(expected), state_present=bool(state))
-        return RedirectResponse("/?auth_error=1")
-
-    uri = "unknown"
-    try:
-        uri      = request.session.pop("redirect_uri", None)  or _redirect_uri(request)
-        verifier = request.session.pop("code_verifier", None)
-        flow     = _flow(uri)
-        flow.fetch_token(code=code, code_verifier=verifier)
-
-        info = id_token.verify_oauth2_token(
-            flow.credentials.id_token,
-            google_requests.Request(),
-            os.getenv("GOOGLE_CLIENT_ID"),
-        )
-    except Exception as e:
-        log_error("OAuth token exchange failed", exc=e, redirect_uri=uri)
-        return RedirectResponse("/?auth_error=1")
-
-    user = {
-        "uid":     info["sub"],
-        "name":    info.get("name", info["email"]),
-        "email":   info["email"],
-        "picture": info.get("picture", ""),
-    }
-
-    from services.firebase import db
-    db.collection("users").document(user["uid"]).set(user, merge=True)
-
-    request.session["user"] = user
-    return RedirectResponse("/")
+    request.session["user"] = {"uid": user["uid"], "name": user["name"], "mobile": mobile}
+    return {"ok": True}
 
 
 @router.get("/logout")

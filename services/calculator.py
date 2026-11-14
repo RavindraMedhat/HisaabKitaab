@@ -1,6 +1,18 @@
 from collections import defaultdict
 
 
+def expense_shares(e: dict) -> dict:
+    """uid -> amount owed for this expense. Supports equal split or exact amounts."""
+    amounts = e.get("split_amounts")
+    if amounts:
+        return {u: float(a) for u, a in amounts.items()}
+    members = e.get("split_among", [])
+    if not members:
+        return {}
+    share = float(e.get("amount", 0)) / len(members)
+    return {u: share for u in members}
+
+
 def calc_my_balance(expenses: list, settlements: list, my_uid: str) -> float:
     """Positive = owed to me. Negative = I owe."""
     balance = 0.0
@@ -8,14 +20,14 @@ def calc_my_balance(expenses: list, settlements: list, my_uid: str) -> float:
     for e in expenses:
         amount = float(e.get("amount", 0))
         paid_by = e.get("paid_by", "")
-        split_among = e.get("split_among", [])
-        if not split_among:
+        shares = expense_shares(e)
+        if not shares:
             continue
-        share = amount / len(split_among)
+        mine = shares.get(my_uid, 0.0)
         if paid_by == my_uid:
-            balance += amount - (share if my_uid in split_among else 0)
-        elif my_uid in split_among:
-            balance -= share
+            balance += amount - mine
+        else:
+            balance -= mine
 
     for s in settlements:
         amt = float(s.get("amount", 0))
@@ -36,12 +48,11 @@ def simplify_debts(expenses: list, settlements: list | None = None) -> list:
     for e in expenses:
         paid_by = e.get("paid_by", "")
         amount = float(e.get("amount", 0))
-        members = e.get("split_among", [])
-        if not members or not paid_by:
+        shares = expense_shares(e)
+        if not shares or not paid_by:
             continue
-        share = amount / len(members)
         balance[paid_by] += amount
-        for m in members:
+        for m, share in shares.items():
             balance[m] -= share
 
     for s in (settlements or []):
@@ -76,3 +87,24 @@ def simplify_debts(expenses: list, settlements: list | None = None) -> list:
             j += 1
 
     return transactions
+
+
+def pair_balances(expenses: list, settlements: list, me: str) -> dict:
+    """uid -> amount that person owes ME (negative = I owe them). Pairwise, no cross-simplification."""
+    bal: dict[str, float] = defaultdict(float)
+    for e in expenses:
+        payer = e.get("paid_by", "")
+        shares = expense_shares(e)
+        if payer == me:
+            for u, sh in shares.items():
+                if u != me:
+                    bal[u] += sh
+        elif me in shares and payer:
+            bal[payer] -= shares[me]
+    for s in settlements:
+        amt = float(s.get("amount", 0))
+        if s.get("from_uid") == me:
+            bal[s.get("to_uid")] += amt
+        elif s.get("to_uid") == me:
+            bal[s.get("from_uid")] -= amt
+    return {u: round(v, 2) for u, v in bal.items()}
