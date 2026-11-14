@@ -928,3 +928,8 @@ html, body { font-family: var(--font-body); }
 .col { flex: 1; min-width: 1.8rem; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: .2rem; }
 .col-bar { width: 100%; background: var(--brand); border-radius: 6px 6px 2px 2px; }
 .col-val, .col-lab { font-size: .68rem; color: var(--muted); font-weight: 700; }
+
+/* QR in payment sheet */
+.qr-box { text-align: center; margin: .6rem 0; }
+.qr-box img { width: 220px; height: 220px; image-rendering: pixelated; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.qr-box[hidden] { display: none; }

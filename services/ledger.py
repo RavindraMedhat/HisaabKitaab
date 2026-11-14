@@ -5,13 +5,13 @@ Canonical records (source of truth):
     expenses/{id}, settlements/{id}
 
 Derived records (written together with the canonical one, in ONE atomic batch):
-    users/{u}/balances/{other}              amount only (other owes u; negative = u owes other)
+    meta/balances                           ONE doc: b[u][v] = how much v owes u (negative = u owes v). Whole gang in one read
     users/{u}/feed/{id}                     copy of every expense/settlement u is part of   → home feed, paginated
     users/{u}/pairs/{other}/items/{id}      copy of items that move money between u and other → friend history, paginated
     users/{u}/monthly/{YYYY-MM}             running totals for reports (spend, categories, tags, friends)
 
 Everyone is everyone's friend, so there is no friends list: friends = all other users (cached in memory 60s).
-Reads therefore cost: friends list = one balance doc per friend, a feed page = `limit` docs, a report = one doc per month.
+Reads therefore cost: friends list = one doc for ALL balances, a feed page = `limit` docs, a report = one doc per month.
 """
 import re
 import threading
@@ -48,7 +48,7 @@ def category_key(desc: str) -> str:
 
 def user_ref(uid):      return db.collection("users").document(uid)
 def _u(uid):            return db.collection("users").document(uid)
-def bal_ref(a, b):      return _u(a).collection("balances").document(b)
+def graph_ref():        return db.collection("meta").document("balances")
 def feed_coll(u):       return _u(u).collection("feed")
 def pair_coll(a, b):    return _u(a).collection("pairs").document(b).collection("items")
 def feed_ref(u, id_):   return feed_coll(u).document(id_)
@@ -134,6 +134,17 @@ def _expense_targets(e: dict, eid: str) -> dict:
 
 # ── Writes (each is one atomic batch) ─────────────────────────────────────────
 
+def _add_balance_changes(batch, changes):
+    """changes: iterable of ((a, b), delta) meaning b owes a `delta` more."""
+    nested: dict = {}
+    for (a, b), v in changes:
+        v = round(v, 2)
+        if abs(v) >= 0.005:
+            nested.setdefault("u" + a, {})["u" + b] = Increment(v)
+    if nested:
+        batch.set(graph_ref(), {"b": nested}, merge=True)
+
+
 def apply_expense(eid: str, old: dict | None, new: dict | None):
     """Move canonical + derived data from `old` state to `new` state (create: old=None, delete: new=None)."""
     batch = db.batch()
@@ -147,10 +158,7 @@ def apply_expense(eid: str, old: dict | None, new: dict | None):
 
     # balances
     eff = _delta(flat_effects, old, new)
-    for (a, b), v in eff.items():
-        v = round(v, 2)
-        if abs(v) >= 0.005:
-            batch.set(bal_ref(a, b), {"amount": Increment(v)}, merge=True)
+    _add_balance_changes(batch, eff.items())
 
     # monthly report docs (month comes from created_at, which never changes)
     base = new or old
@@ -175,13 +183,10 @@ def apply_expense(eid: str, old: dict | None, new: dict | None):
     batch.commit()
 
 
-def apply_settlement(sid: str, s: dict):
-    """s: from_uid, to_uid, amount, note, tags, names{uid:name}, created_by, created_at"""
+def _add_settlement(batch, sid: str, s: dict):
     f, t, amt = s["from_uid"], s["to_uid"], s["amount"]
-    batch = db.batch()
     batch.set(db.collection("settlements").document(sid), s)
-    batch.set(bal_ref(t, f), {"amount": Increment(-amt)}, merge=True)
-    batch.set(bal_ref(f, t), {"amount": Increment(amt)}, merge=True)
+    _add_balance_changes(batch, [((t, f), -amt), ((f, t), amt)])
 
     month = month_of(s["created_at"])
     batch.set(month_ref(f, month), {"settled": Increment(amt)}, merge=True)
@@ -191,7 +196,18 @@ def apply_settlement(sid: str, s: dict):
              "from_name": s["names"].get(f, ""), "to_name": s["names"].get(t, "")}
     for r in (feed_ref(f, sid), feed_ref(t, sid), pair_ref(f, t, sid), pair_ref(t, f, sid)):
         batch.set(r, entry)
+
+
+def apply_settlements(legs: list):
+    """legs: [(sid, settlement dict), ...] — all recorded in ONE atomic batch."""
+    batch = db.batch()
+    for sid, s in legs:
+        _add_settlement(batch, sid, s)
     batch.commit()
+
+
+def apply_settlement(sid: str, s: dict):
+    apply_settlements([(sid, s)])
 
 
 # ── Reads ─────────────────────────────────────────────────────────────────────
@@ -218,22 +234,75 @@ def invalidate_users():
     _users_cache["t"] = 0.0
 
 
-def _amt(snap) -> float:
-    return round(float((snap.to_dict() or {}).get("amount", 0)), 2)
+def read_graph() -> dict:
+    """{a: {b: amount}} — amount > 0 means b owes a. One read for the whole gang."""
+    d = graph_ref().get()
+    raw = (d.to_dict() or {}).get("b", {}) if d.exists else {}
+    return {a[1:]: {b[1:]: round(float(v), 2) for b, v in row.items()} for a, row in raw.items()}
 
 
-def friends_of(uid: str) -> list:
-    """Every other user, with the stored running balance (one small doc per friend you've had money with)."""
-    bals = {d.id: _amt(d) for d in _u(uid).collection("balances").stream()}
-    return [{**u, "balance": bals.get(u["uid"], 0.0)} for k, u in all_users().items() if k != uid]
+def friends_of(uid: str, graph: dict | None = None) -> list:
+    """Every other user with their running balance to you (positive = they owe you)."""
+    row = (graph if graph is not None else read_graph()).get(uid, {})
+    return [{**u, "balance": row.get(k, 0.0)} for k, u in all_users().items() if k != uid]
 
 
 def friend_doc(uid: str, other: str) -> dict | None:
     u = all_users().get(other)
     if not u or other == uid:
         return None
-    d = bal_ref(uid, other).get()
-    return {**u, "balance": _amt(d) if d.exists else 0.0}
+    return {**u, "balance": read_graph().get(uid, {}).get(other, 0.0)}
+
+
+# ── Settle-up plan: fewest payments that clear everyone, along real debts ─────
+
+def settle_plan(graph: dict) -> list:
+    """Suggest payments such that everyone ends at zero.
+    Each payment follows real debts, e.g. A owes B 500 and B owes C 400 → A pays B 100 and C 400.
+    Returns [{"from", "to", "amount", "path": [uids]}]; `path` lists the hops the money is routed
+    through (the first and last are payer and receiver; middle ones are people whose debts it clears)."""
+    debts: dict = {}                      # debts[a][b] = a owes b
+    net: dict = {}
+    for a, row in graph.items():
+        net[a] = round(sum(row.values()), 2)
+        for b, v in row.items():
+            if v < -0.005:
+                debts.setdefault(a, {})[b] = -v
+
+    plan = []
+    for _ in range(200):                  # hard stop; real gangs need a handful
+        debtor = min((u for u, n in net.items() if n < -0.005), key=lambda u: net[u], default=None)
+        if debtor is None:
+            break
+        # breadth-first search along debts for the nearest person who is owed overall
+        prev, queue, target = {debtor: None}, [debtor], None
+        while queue and target is None:
+            x = queue.pop(0)
+            for y, amt in debts.get(x, {}).items():
+                if amt > 0.005 and y not in prev:
+                    prev[y] = x
+                    if net.get(y, 0) > 0.005:
+                        target = y
+                        break
+                    queue.append(y)
+        if target is None:
+            net[debtor] = 0.0             # leftover is a debt cycle; it cancels out
+            continue
+        path = [target]
+        while prev[path[-1]] is not None:
+            path.append(prev[path[-1]])
+        path.reverse()
+        hops = list(zip(path, path[1:]))
+        m = round(min(-net[debtor], net[target], *(debts[a][b] for a, b in hops)), 2)
+        if m < 0.005:
+            net[debtor] = 0.0
+            continue
+        for a, b in hops:
+            debts[a][b] = round(debts[a][b] - m, 2)
+        net[debtor] = round(net[debtor] + m, 2)
+        net[target] = round(net[target] - m, 2)
+        plan.append({"from": debtor, "to": target, "amount": m, "path": path})
+    return plan
 
 
 def ser(d: dict) -> dict:
@@ -264,13 +333,15 @@ def rebuild_all() -> dict:
 
     # 1. clear derived data
     for uid in users:
-        for sub in ("balances", "feed", "monthly"):
+        for sub in ("balances", "feed", "monthly"):          # "balances" = old per-user layout, cleaned up here
             _wipe_collection(_u(uid).collection(sub))
         for pdoc in _u(uid).collection("pairs").list_documents():
             _wipe_collection(pdoc.collection("items"))
             pdoc.delete()
 
     names = {u: d.get("name", u) for u, d in users.items()}
+
+    graph_ref().delete()
 
     # 2. replay history
     exps = list(db.collection("expenses").stream())

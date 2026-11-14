@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#5B3DF5">
+  <title>Pay with UPI</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#F5F4FA;color:#1C1C1E;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1rem}
+    .card{background:#fff;border-radius:22px;padding:1.6rem 1.4rem;width:100%;max-width:360px;text-align:center;box-shadow:0 6px 30px rgba(22,19,58,.08)}
+    .to{font-size:.9rem;color:#8E8E93;font-weight:600}
+    .name{font-size:1.15rem;font-weight:800;margin:.1rem 0 .6rem}
+    .amt{font-size:2.6rem;font-weight:800;letter-spacing:-.03em;margin-bottom:1rem}
+    img{width:230px;height:230px;image-rendering:pixelated;border-radius:12px;border:1px solid #E5E5EA;padding:6px;background:#fff}
+    .hint{font-size:.78rem;color:#8E8E93;margin:.5rem 0 1rem}
+    a.btn,button{display:block;width:100%;padding:.9rem;border-radius:12px;border:none;font:700 1rem inherit;text-decoration:none;cursor:pointer;margin-top:.6rem}
+    a.btn{background:#5B3DF5;color:#fff}
+    button{background:#EEEAFF;color:#5B3DF5}
+    .upi{font-size:.85rem;color:#3C3C43;font-weight:700;word-break:break-all}
+    .err{color:#D63B3B;font-weight:700}
+  </style>
+</head>
+<body>
+  <div class="card" id="card"></div>
+  <script src="/static/qrcode.min.js"></script>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const pa = (q.get('pa') || '').trim(), pn = (q.get('pn') || '').trim().slice(0, 60);
+    const am = parseFloat(q.get('am')), tn = (q.get('tn') || '').slice(0, 80);
+    const card = document.getElementById('card');
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+    if (!/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(pa) || !(am > 0)) {
+      card.appendChild(el('div', 'err', 'This payment link is not valid.'));
+    } else {
+      const link = `upi://pay?pa=${encodeURIComponent(pa)}&pn=${encodeURIComponent(pn)}&am=${am.toFixed(2)}&cu=INR&tn=${encodeURIComponent(tn)}`;
+      const qr = qrcode(0, 'M'); qr.addData(link); qr.make();
+      const n = qr.getModuleCount(), scale = 8, margin = 4, c = document.createElement('canvas');
+      c.width = c.height = (n + margin * 2) * scale;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#000';
+      for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (qr.isDark(r, k)) g.fillRect((k + margin) * scale, (r + margin) * scale, scale, scale);
+      const img = el('img'); img.src = c.toDataURL('image/png'); img.alt = 'UPI payment QR';
+
+      card.append(el('div', 'to', 'Pay'), el('div', 'name', pn || pa),
+        el('div', 'amt', '₹' + am.toLocaleString('en-IN', { maximumFractionDigits: 2 })), img,
+        el('div', 'hint', 'Scan with any UPI app, or tap the button on your phone'));
+      const open = el('a', 'btn', 'Pay with UPI app'); open.href = link; card.appendChild(open);
+      card.appendChild(el('div', 'upi', pa));
+      const copy = el('button', '', 'Copy UPI ID');
+      copy.onclick = () => navigator.clipboard?.writeText(pa).then(() => { copy.textContent = 'Copied ✓'; });
+      card.appendChild(copy);
+    }
+  </script>
+</body>
+</html>

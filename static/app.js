@@ -24,7 +24,7 @@ const ROUTES = [
   [/^#\/friends\/([^/?]+)$/,   (m) => viewFriend(m[1])],
   [/^#\/friends\/?$/,          viewFriends],
   [/^#\/add(?:\?(.*))?$/,      (m) => viewAddExpense(m[1])],
-  [/^#\/insights$/,           () => viewInsights('all')],
+  [/^#\/insights$/,           () => viewInsights('month')],
   [/^#\/account$/,            viewAccount],
   [/^(#\/?)?$/,               viewDashboard],
 ];
@@ -284,7 +284,8 @@ async function viewDashboard() {
   catch { toast('Could not load data'); return; }
   if (!data) return;
 
-  const { net_balance, owed, owe, items: activity, uid, friends, next_cursor } = data;
+  const { net_balance, owed, owe, items: activity, uid, friends, next_cursor, plan } = data;
+  window.__plan = plan;
   PAGERS.feed = i => actRow(i, uid);
   const first = (S.user?.name || '').split(' ')[0];
   const label = net_balance > 0.01 ? 'You are owed' : net_balance < -0.01 ? 'You owe' : 'All settled up';
@@ -331,6 +332,17 @@ async function viewDashboard() {
           <div class="empty-title">Waiting for the gang</div>
           <div class="empty-sub">Everyone who signs in shows up here. Send them the invite!</div>
         </div>` : ''}
+
+      ${plan.length ? `<div class="hk-section">Suggested payments</div><div class="hk-group" style="padding:.1rem 1rem">${plan.map((t, i) => {
+        const paying = t.from_uid === uid, o = paying ? t.to : t.from;
+        return `<div class="settle-row">${av(o.name)}
+          <div class="flex1" style="min-width:0">
+            <div class="trunc" style="font-size:.93rem">${paying ? 'Pay' : ''} <strong>${esc(o.name)}</strong>${paying ? '' : ' pays you'}</div>
+            <div class="amt ${paying ? 'neg' : 'pos'}">${fmt(t.amount)}</div>
+            ${t.via.length ? `<div class="muted" style="font-size:.74rem">${paying ? 'also clears what you owe' : 'also clears what'} ${esc(t.via.join(', '))}${paying ? '' : ' owes you'}</div>` : ''}
+          </div>
+          <button class="settle-btn ${paying ? '' : 'settle-btn-alt'}" onclick="openPlan(${i})">${paying ? 'Pay' : 'Received'}</button></div>`;
+      }).join('')}</div>` : ''}
 
       ${pending.length ? `<div class="hk-section">Balances</div><div class="hk-group">${friendRows}</div>` : ''}
 
@@ -482,30 +494,73 @@ async function viewFriend(fid) {
   </div>`);
 }
 
-function shareBalance() {
-  const { friend, balance } = window.__settleData;
-  const fn = friend.name.split(' ')[0];
-  const mine = S.user?.upi ? `\nPay to: ${S.user.upi}` : '';
-  waOpen(balance > 0
-    ? `Hey ${fn}! 🎱 You owe me ${fmt(balance)} on HisaabKitaab.${mine}`
-    : `Hey ${fn}! 🎱 I owe you ${fmt(balance)} on HisaabKitaab — paying you soon.`);
+// ── Payments: UPI link, QR, WhatsApp ──────────────────────────────────────
+// QR as a PNG data-URL (white background, quiet zone) — scans from a phone screen or a shared image
+function qrPng(text) {
+  const q = qrcode(0, 'M');
+  q.addData(text); q.make();
+  const n = q.getModuleCount(), scale = 8, margin = 4;
+  const c = document.createElement('canvas');
+  c.width = c.height = (n + margin * 2) * scale;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) g.fillRect((k + margin) * scale, (r + margin) * scale, scale, scale);
+  return c.toDataURL('image/png');
 }
 
-function openSettle() {
-  const { friend, balance, uid } = window.__settleData;
-  const paying = balance < 0;
-  const amt = Math.abs(balance);
-  const fn = friend.name.split(' ')[0];
+// Clickable web link (WhatsApp won't linkify upi://) that opens a page with the QR and a Pay button
+function payPage(upi, name, amount, note) {
+  return `${location.origin}/static/pay.html?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${(+amount).toFixed(2)}&tn=${encodeURIComponent(note)}`;
+}
+
+// "Please pay me" message: text + one-tap pay link (my UPI ID + amount), and the QR image where the phone can share files
+async function sendPayRequest(otherName, amount) {
+  const fn = otherName.split(' ')[0];
+  const me = S.user;
+  const link = me?.upi ? payPage(me.upi, me.name, amount, 'HisaabKitaab') : '';
+  const text = `Hey ${fn}! 🎱 You owe me ${fmt(amount)} on HisaabKitaab.` +
+    (link ? `\nPay in one tap (or scan the QR): ${link}\nUPI ID: ${me.upi}` : '');
+  if (link && navigator.canShare) {
+    try {
+      const blob = await (await fetch(qrPng(upiLink(me.upi, me.name, amount, 'HisaabKitaab')))).blob();
+      const file = new File([blob], 'pay-me.png', { type: 'image/png' });
+      if (navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text }); return; }
+    } catch (e) { if (e?.name === 'AbortError') return; }
+  }
+  waOpen(text);
+}
+
+function shareBalance() {
+  const { friend, balance } = window.__settleData;
+  if (balance > 0) return sendPayRequest(friend.name, balance);
+  waOpen(`Hey ${friend.name.split(' ')[0]}! 🎱 I owe you ${fmt(balance)} on HisaabKitaab — paying you soon.`);
+}
+
+// One sheet for every payment: a direct balance with a friend, or a suggested (possibly routed) payment.
+// opts: { other:{uid,name,upi}, paying, amount, plan, via:[names], onDone }
+function openPayment(opts) {
+  const { other, paying, amount, plan, via = [], onDone } = opts;
+  const me = S.user;
+  const fn = other.name.split(' ')[0];
   const note = 'HisaabKitaab settle up';
 
-  let extra;
-  if (paying && friend.upi) {
-    extra = `<a class="btn btn-upi" id="upi-pay" href="${esc(upiLink(friend.upi, friend.name, amt, note))}">Pay ${fmt(amt)} with UPI</a>
-             <div class="upi-to">to ${esc(friend.upi)} — opens GPay, PhonePe, Paytm…</div>`;
+  let extra = '';
+  if (plan && via.length) {
+    extra += `<div class="hint">${paying
+      ? `Paying ${esc(fn)} directly also clears what you owe ${esc(via.join(', '))}.`
+      : `${esc(fn)} pays you directly, which also clears what ${esc(via.join(', '))} owes you.`}</div>`;
+  }
+  if (paying && other.upi) {
+    extra += `
+      <a class="btn btn-upi" id="upi-pay" href="${esc(upiLink(other.upi, other.name, amount, note))}">Pay ${fmt(amount)} with UPI</a>
+      <button class="btn btn-ghost" id="show-qr" style="margin-top:.4rem">Show QR to scan</button>
+      <div id="qr-box" hidden class="qr-box"><img alt="UPI QR"><div class="upi-to">${esc(other.upi)}</div></div>`;
   } else if (paying) {
-    extra = `<div class="hint">${esc(fn)} hasn't added a UPI ID yet. Pay by cash, or ask them to add it under Account.</div>`;
+    extra += `<div class="hint">${esc(fn)} hasn't added a UPI ID yet. Pay by cash, or ask them to add it under Account.</div>`;
   } else {
-    extra = `<button class="btn btn-wa" id="remind">Remind ${esc(fn)} on WhatsApp</button>`;
+    extra += `<button class="btn btn-wa" id="remind">${me.upi ? 'Send payment QR on WhatsApp' : `Remind ${esc(fn)} on WhatsApp`}</button>
+      ${me.upi ? '' : '<div class="upi-to">Add your UPI ID in Account to include a QR and one-tap pay link.</div>'}`;
   }
 
   const overlay = document.createElement('div');
@@ -513,14 +568,14 @@ function openSettle() {
   overlay.innerHTML = `
     <div class="modal-sheet" style="max-height:92dvh;overflow-y:auto">
       <div class="modal-handle"></div>
-      <div class="modal-title">${paying ? `Pay ${esc(friend.name)}` : `${esc(friend.name)} pays you`}</div>
-      <div class="modal-amount" style="color:${paying ? 'var(--neg)' : 'var(--pos)'}">${fmt(amt)}</div>
+      <div class="modal-title">${paying ? `Pay ${esc(other.name)}` : `${esc(other.name)} pays you`}</div>
+      <div class="modal-amount" style="color:${paying ? 'var(--neg)' : 'var(--pos)'}">${fmt(amount)}</div>
       ${extra}
       <div class="settle-done">
         <div class="hk-section" style="padding:1rem 0 .4rem">${paying ? 'Paid already?' : 'Got the money?'} Record it</div>
         <div class="form-group" style="padding:0 0 .5rem">
           <label class="form-label">Amount (₹)</label>
-          <input id="settle-amt" class="form-input" type="number" inputmode="decimal" min="0.01" step="0.01" value="${amt.toFixed(2)}">
+          <input id="settle-amt" class="form-input" type="number" inputmode="decimal" min="0.01" step="0.01" value="${amount.toFixed(2)}">
         </div>
         <input id="settle-note" class="form-input" maxlength="200" placeholder="Optional label, e.g. food #garaba #ravibirthday" style="margin-bottom:.5rem">
         <div class="modal-btns">
@@ -533,32 +588,54 @@ function openSettle() {
 
   const amtEl = overlay.querySelector('#settle-amt');
   const upiEl = overlay.querySelector('#upi-pay');
+  const qrBtn = overlay.querySelector('#show-qr');
+  const qrBox = overlay.querySelector('#qr-box');
+  const curAmt = () => { const v = parseFloat(amtEl.value); return v > 0 ? v : amount; };
+  const drawQr = () => { qrBox.querySelector('img').src = qrPng(upiLink(other.upi, other.name, curAmt(), note)); };
   if (upiEl) amtEl.addEventListener('input', () => {
-    const v = parseFloat(amtEl.value);
-    if (v > 0) upiEl.href = upiLink(friend.upi, friend.name, v, note);
+    upiEl.href = upiLink(other.upi, other.name, curAmt(), note);
+    if (!qrBox.hidden) drawQr();
   });
+  if (qrBtn) qrBtn.onclick = () => {
+    qrBox.hidden = !qrBox.hidden;
+    qrBtn.textContent = qrBox.hidden ? 'Show QR to scan' : 'Hide QR';
+    if (!qrBox.hidden) drawQr();
+  };
   const rem = overlay.querySelector('#remind');
-  if (rem) rem.onclick = shareBalance;
+  if (rem) rem.onclick = () => sendPayRequest(other.name, curAmt());
 
   overlay.querySelector('#cancel-settle').onclick = () => overlay.remove();
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector('#confirm-settle').onclick = async () => {
     const btn = overlay.querySelector('#confirm-settle');
-    const amount = parseFloat(amtEl.value);
-    if (!amount || amount <= 0) { toast('Enter the amount paid'); return; }
+    const amt = parseFloat(amtEl.value);
+    if (!amt || amt <= 0) { toast('Enter the amount paid'); return; }
     btn.disabled = true;
     try {
-      await api('POST', '/api/settlements', {
-        from_uid: paying ? uid : friend.uid,
-        to_uid:   paying ? friend.uid : uid,
-        amount:   Math.round(amount * 100) / 100,
+      await api('POST', plan ? '/api/settle-plan' : '/api/settlements', {
+        from_uid: paying ? me.uid : other.uid,
+        to_uid:   paying ? other.uid : me.uid,
+        amount:   Math.round(amt * 100) / 100,
         note:     overlay.querySelector('#settle-note').value,
       });
       overlay.remove();
       toast('Payment recorded ✓');
-      viewFriend(friend.uid);
+      onDone();
     } catch (e) { toast(e.message); btn.disabled = false; }
   };
+}
+
+// friend page: settle the direct balance with this friend
+function openSettle() {
+  const { friend, balance } = window.__settleData;
+  openPayment({ other: friend, paying: balance < 0, amount: Math.abs(balance), plan: false, onDone: () => viewFriend(friend.uid) });
+}
+
+// home: a suggested payment (may be routed through someone you owe)
+function openPlan(i) {
+  const t = window.__plan[i];
+  const paying = t.from_uid === S.user.uid;
+  openPayment({ other: paying ? t.to : t.from, paying, amount: t.amount, plan: true, via: t.via, onDone: viewDashboard });
 }
 
 // ── Expense detail ────────────────────────────────────────────────────────
@@ -892,7 +969,7 @@ async function submitExpense() {
 // ── Insights ──────────────────────────────────────────────────────────────
 const CAT_COLORS = { Food: '#FF8C42', Drinks: '#F15BB5', Travel: '#3D7BFF', 'Fuel & tolls': '#00A8E8', Stay: '#9B5DE5', Fun: '#FFB400', Groceries: '#00B894', Other: '#9A97B5' };
 
-async function viewInsights(range = 'all') {
+async function viewInsights(range = 'month') {
   render(`<div class="page"><div class="page-body"><div class="empty"><div class="empty-icon">⏳</div></div></div></div>`);
   let d;
   try { d = await api('GET', `/api/insights?range=${range}`); }

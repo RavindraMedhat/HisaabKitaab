@@ -57,7 +57,7 @@ Derived — written in ONE atomic batch with every expense/settlement change by 
 
 | Path | Purpose |
 |------|---------|
-| `users/{u}/balances/{other}` | running balance (positive = other owes u) — friends list, dashboard, settle cap |
+| `meta/balances` | ONE doc: `b[u][v]` = how much v owes u (negative = u owes v). Whole gang in one read — friends list, dashboard, settle-up plan |
 | `users/{u}/feed/{id}` | copy of each item u is part of — home feed (paginated) |
 | `users/{u}/pairs/{other}/items/{id}` | items that move money between two people — friend history (paginated) |
 | `users/{u}/monthly/{YYYY-MM}` | running report totals (spend, categories, #tags, friends) — Insights |
@@ -70,12 +70,15 @@ Lists use cursor pagination (`next_cursor`), 15 per page. If derived data ever d
 - `GET /me`, `PUT /me/upi`
 - `GET /friends`, `GET /friends/{uid}` (+ `/history?cursor=`), `GET /feed?cursor=`
 - `POST /expenses`, `GET|PUT|DELETE /expenses/{id}` (edit/delete: creator or payer)
-- `POST /settlements` (capped at actual debt)
-- `GET /dashboard`, `GET /insights?range=month|3m|all`
+- `POST /settlements` (direct, capped at actual debt)
+- `POST /settle-plan` — pay a suggested payment; routed ones (A pays C on B's behalf) record each hop as its own settlement (A→B, B→C) atomically
+- `GET /dashboard` (includes `plan`: my suggested payments from `ledger.settle_plan`), `GET /insights?range=month|3m|all`
 
 ## Frontend routes
 
 `#/` home · `#/friends` · `#/friends/{uid}` · `#/add[?friend=uid|edit=id]` · `#/insights` · `#/account` · `#/login`
+
+Settle-up plan (`settle_plan` in ledger.py): fewest payments along real debts, e.g. A owes B 500 and B owes C 400 → A pays B 100 and C 400. Payments & reminders: `static/pay.html` is a public page (QR + Pay button) linked from WhatsApp messages; `static/qrcode.min.js` (qrcode-generator, vendored) draws QRs.
 
 Features: UPI deep-link "Pay" button, WhatsApp remind/invite messages, exact-amount splits, optional `#labels`, insights (category, month, label, friend).
 

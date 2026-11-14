@@ -7,7 +7,8 @@ from pydantic import BaseModel
 
 from services.firebase import db
 from services import ledger
-from services.ledger import all_users, friends_of, friend_doc, page, ser, invalidate_users, user_ref, feed_coll, pair_coll
+from services.ledger import (all_users, friends_of, friend_doc, page, ser, invalidate_users, user_ref,
+                             feed_coll, pair_coll, read_graph, settle_plan)
 from routers.auth import UPI_RE
 
 router = APIRouter()
@@ -64,6 +65,18 @@ def _check_amount(amount: float):
 
 def _sort_friends(friends: list) -> list:
     return sorted(friends, key=lambda f: (-abs(f["balance"]), f["name"].lower()))
+
+
+def _my_plan(graph: dict, uid: str) -> list:
+    """Suggested payments that involve me, with names/UPI ready for the UI."""
+    users = all_users()
+    out = []
+    for t in settle_plan(graph):
+        if uid in (t["from"], t["to"]):
+            out.append({"from_uid": t["from"], "to_uid": t["to"], "amount": t["amount"],
+                        "from": users[t["from"]], "to": users[t["to"]],
+                        "via": [users[u]["name"] for u in t["path"][1:-1]]})
+    return out
 
 
 def _totals(friends: list):
@@ -129,11 +142,13 @@ def feed(request: Request, cursor: str = "", limit: int = PAGE):
 @router.get("/dashboard")
 def get_dashboard(request: Request):
     uid     = _uid(request)
-    friends = friends_of(uid)                      # balances are stored — no history scan
+    graph   = read_graph()                         # one read for the whole gang's balances
+    friends = friends_of(uid, graph)
     owed, owe = _totals(friends)
     items, nxt = page(feed_coll(uid), HOME_FEED, None)
     return {"net_balance": round(owed - owe, 2), "owed": owed, "owe": owe,
-            "friends": _sort_friends(friends), "items": items, "next_cursor": nxt, "uid": uid}
+            "friends": _sort_friends(friends), "items": items, "next_cursor": nxt, "uid": uid,
+            "plan": _my_plan(graph, uid)}
 
 
 # ── Expenses ──────────────────────────────────────────────────────────────────
@@ -269,6 +284,47 @@ def add_settlement(body: SettleBody, request: Request):
         "created_by": uid, "created_at": _now(),
     })
     return {"id": sid}
+
+
+class PlanPayBody(BaseModel):
+    from_uid: str
+    to_uid:   str
+    amount:   float
+    note:     Optional[str] = ""
+
+
+@router.post("/settle-plan", status_code=201)
+def pay_plan(body: PlanPayBody, request: Request):
+    """Record a suggested payment. If it is routed (A pays C on B's behalf) every hop is recorded
+    as its own settlement (A→B and B→C) in one atomic batch, so each pair's balance stays correct."""
+    uid = _uid(request)
+    _check_amount(body.amount)
+    if uid not in (body.from_uid, body.to_uid):
+        raise HTTPException(403, "You can only record payments you are part of")
+    users = all_users()
+    remaining = round(body.amount, 2)
+    legs, note = [], _note(body.note)
+    for t in settle_plan(read_graph()):
+        if remaining < 0.005:
+            break
+        if t["from"] != body.from_uid or t["to"] != body.to_uid:
+            continue
+        m = min(t["amount"], remaining)
+        remaining = round(remaining - m, 2)
+        path = t["path"]
+        via = [users[u]["name"] for u in path[1:-1]]
+        how = f"{users[path[0]]['name']} paid {users[path[-1]]['name']} directly" + (f" (settles {', '.join(via)})" if via else "")
+        for a, b in zip(path, path[1:]):
+            legs.append((db.collection("settlements").document().id, {
+                "from_uid": a, "to_uid": b, "amount": m,
+                "participants": [a, b], "note": f"{note} · {how}" if note else how, "tags": _tags(note),
+                "names": {a: users[a]["name"], b: users[b]["name"]},
+                "created_by": uid, "created_at": _now(),
+            }))
+    if remaining >= 0.005 or not legs:
+        raise HTTPException(400, "That payment is no longer in the suggested plan — refresh and try again")
+    ledger.apply_settlements(legs)
+    return {"ok": True, "legs": len(legs)}
 
 
 # ── Insights (reads one small doc per month) ──────────────────────────────────
