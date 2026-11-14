@@ -519,8 +519,12 @@ async function sendPayRequest(otherName, amount) {
   const fn = otherName.split(' ')[0];
   const me = S.user;
   const link = me?.upi ? payPage(me.upi, me.name, amount, 'HisaabKitaab') : '';
-  const text = `Hey ${fn}! 🎱 You owe me ${fmt(amount)} on HisaabKitaab.` +
-    (link ? `\nUPI ID: ${me.upi}\nScan the QR or tap to pay: ${link}` : '');
+  const text = link
+    ? `Hi ${fn} 👋\nQuick reminder from HisaabKitaab 🎱 — you owe me *${fmt(amount)}*.\n\n` +
+      `💸 Pay in one tap — open the link, then scan the QR or press "Pay with UPI app":\n${link}\n\n` +
+      `UPI ID: ${me.upi}\n\nOnce it's done, just send me a 👍. Thanks! 🙏`
+    : `Hi ${fn} 👋\nQuick reminder from HisaabKitaab 🎱 — you owe me *${fmt(amount)}*.\n\n` +
+      `Whenever you get a chance, please pay me by UPI or cash and send me a 👍. Thanks! 🙏`;
   if (link && navigator.canShare) {
     try {
       const blob = await (await fetch(qrPng(upiLink(me.upi, me.name, amount, 'HisaabKitaab')))).blob();
@@ -534,7 +538,7 @@ async function sendPayRequest(otherName, amount) {
 function shareBalance() {
   const { friend, balance } = window.__settleData;
   if (balance > 0) return sendPayRequest(friend.name, balance);
-  waOpen(`Hey ${friend.name.split(' ')[0]}! 🎱 I owe you ${fmt(balance)} on HisaabKitaab — paying you soon.`);
+  waOpen(`Hi ${friend.name.split(' ')[0]} 👋\nQuick update from HisaabKitaab 🎱 — I owe you *${fmt(balance)}*.\n\nI'll pay you soon. Thanks for waiting! 🙏`);
 }
 
 // One sheet for every payment: a direct balance with a friend, or a suggested (possibly routed) payment.
