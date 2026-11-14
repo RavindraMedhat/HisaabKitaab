@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from routers import auth, api
+from routers import auth, api, pay
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -22,6 +22,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth")
 app.include_router(api.router,  prefix="/api")
+app.include_router(pay.router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

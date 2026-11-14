@@ -511,7 +511,7 @@ function qrPng(text) {
 
 // Clickable web link (WhatsApp won't linkify upi://) that opens a page with the QR and a Pay button
 function payPage(upi, name, amount, note) {
-  return `${location.origin}/static/pay.html?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${(+amount).toFixed(2)}&tn=${encodeURIComponent(note)}`;
+  return `${location.origin}/pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${(+amount).toFixed(2)}&tn=${encodeURIComponent(note)}`;
 }
 
 // "Please pay me" message: text + one-tap pay link (my UPI ID + amount), and the QR image where the phone can share files
@@ -520,7 +520,7 @@ async function sendPayRequest(otherName, amount) {
   const me = S.user;
   const link = me?.upi ? payPage(me.upi, me.name, amount, 'HisaabKitaab') : '';
   const text = `Hey ${fn}! 🎱 You owe me ${fmt(amount)} on HisaabKitaab.` +
-    (link ? `\nPay in one tap (or scan the QR): ${link}\nUPI ID: ${me.upi}` : '');
+    (link ? `\nUPI ID: ${me.upi}\nScan the QR or tap to pay: ${link}` : '');
   if (link && navigator.canShare) {
     try {
       const blob = await (await fetch(qrPng(upiLink(me.upi, me.name, amount, 'HisaabKitaab')))).blob();

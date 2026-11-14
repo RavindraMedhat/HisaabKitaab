@@ -78,7 +78,7 @@ Lists use cursor pagination (`next_cursor`), 15 per page. If derived data ever d
 
 `#/` home · `#/friends` · `#/friends/{uid}` · `#/add[?friend=uid|edit=id]` · `#/insights` · `#/account` · `#/login`
 
-Settle-up plan (`settle_plan` in ledger.py): fewest payments along real debts, e.g. A owes B 500 and B owes C 400 → A pays B 100 and C 400. Payments & reminders: `static/pay.html` is a public page (QR + Pay button) linked from WhatsApp messages; `static/qrcode.min.js` (qrcode-generator, vendored) draws QRs.
+Settle-up plan (`settle_plan` in ledger.py): fewest payments along real debts, e.g. A owes B 500 and B owes C 400 → A pays B 100 and C 400. Payments & reminders: `routers/pay.py` serves public `/pay` (QR + Pay button, with og:image tags so WhatsApp shows the QR as a link preview) and `/qr.png` (server-side QR via `segno`); `static/qrcode.min.js` (qrcode-generator, vendored) draws QRs.
 
 Features: UPI deep-link "Pay" button, WhatsApp remind/invite messages, exact-amount splits, optional `#labels`, insights (category, month, label, friend).
 
