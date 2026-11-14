@@ -4,9 +4,9 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from google.cloud.firestore_v1 import ArrayUnion
 
 from services.firebase import db
+from services.ledger import invalidate_users
 
 router = APIRouter()
 
@@ -23,24 +23,6 @@ def normalize_mobile(raw: str) -> str:
     return digits
 
 
-def connect_everyone(me: str):
-    """Group-only app: every account is automatically friends with every other account."""
-    others = {}
-    my_friends = set()
-    for d in db.collection("users").stream():
-        data = d.to_dict() or {}
-        if d.id == me:
-            my_friends = set(data.get("friends", []))
-        else:
-            others[d.id] = set(data.get("friends", []))
-    missing = [u for u in others if u not in my_friends]
-    if missing:
-        db.collection("users").document(me).set({"friends": ArrayUnion(missing)}, merge=True)
-    for u, their in others.items():
-        if me not in their:
-            db.collection("users").document(u).set({"friends": ArrayUnion([me])}, merge=True)
-
-
 class LoginBody(BaseModel):
     mobile: str
     password: str
@@ -49,7 +31,7 @@ class LoginBody(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginBody, request: Request):
+def login(body: LoginBody, request: Request):
     mobile = normalize_mobile(body.mobile)
     password = body.password or ""
     if len(password) < 4:
@@ -75,13 +57,13 @@ async def login(body: LoginBody, request: Request):
             raise HTTPException(400, "That doesn't look like a UPI ID (example: name@oksbi)")
         user = {"uid": mobile, "name": name, "mobile": mobile, "upi": upi, "password": password}
         ref.set(user)
+        invalidate_users()
 
-    connect_everyone(mobile)
     request.session["user"] = {"uid": user["uid"], "name": user["name"], "mobile": mobile}
     return {"ok": True}
 
 
 @router.get("/logout")
-async def logout(request: Request):
+def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/")

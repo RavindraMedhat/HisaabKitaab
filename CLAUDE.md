@@ -25,11 +25,12 @@ FastAPI + vanilla HTML/CSS/JS frontend, Firebase Firestore. No groups: one gang.
 main.py              FastAPI app, sessions, global error handler
 routers/auth.py      POST /auth/login (mobile+password, creates account on first use), GET /auth/logout
 routers/api.py       friends, expenses, settlements, dashboard, insights
-services/calculator.py   expense_shares (equal/exact), pair_balances (per-friend balance)
+services/ledger.py       derived-data writer/reader (balances, feeds, monthly stats), rebuild_all
+services/calculator.py   expense_shares (equal/exact split)
 services/firebase.py     Admin SDK init (env var or file)
 services/logger.py       log_error() → Firestore logs
 static/              index.html, style.css (bingo theme), app.js (hash router + all views)
-scripts/             check_logs.py, clear_logs.py, wipe_all.py (deletes ALL data, needs --yes)
+scripts/             check_logs.py, clear_logs.py, rebuild_cache.py, wipe_all.py (deletes ALL data, needs --yes)
 ```
 `services/auth.py` and `services/groups.py` are unused Streamlit leftovers.
 
@@ -48,26 +49,29 @@ Google OAuth variables (`GOOGLE_CLIENT_*`, `REDIRECT_URI`) are no longer used.
 
 ---
 
-## Firestore
+## Firestore (canonical + derived, so screens never recompute history)
 
-| Collection | Fields |
-|-----------|--------|
-| `users/{mobile}` | uid (=mobile), name, mobile, upi, password, friends[] (mutual) |
-| `expenses/{id}` | description, amount, paid_by, split_among[], split_amounts{}?, participants[], note, tags[], created_by, created_at |
-| `settlements/{id}` | from_uid, to_uid, amount, participants[], note, tags[], created_by, created_at |
-| `logs/{id}` | error logs |
+Canonical (source of truth): `users/{mobile}` (uid, name, mobile, upi, password), `expenses/{id}`, `settlements/{id}`, `logs/{id}`.
 
-Tags are `#hashtags` parsed from description / note. Balances are pairwise (me ↔ each friend), no cross-simplification.
+Derived — written in ONE atomic batch with every expense/settlement change by `services/ledger.py`:
 
----
+| Path | Purpose |
+|------|---------|
+| `users/{u}/balances/{other}` | running balance (positive = other owes u) — friends list, dashboard, settle cap |
+| `users/{u}/feed/{id}` | copy of each item u is part of — home feed (paginated) |
+| `users/{u}/pairs/{other}/items/{id}` | items that move money between two people — friend history (paginated) |
+| `users/{u}/monthly/{YYYY-MM}` | running report totals (spend, categories, #tags, friends) — Insights |
+
+No friends list is stored: friends = every other user (`all_users()`, cached 60s in memory, no passwords loaded).
+Lists use cursor pagination (`next_cursor`), 15 per page. If derived data ever drifts, run `python scripts/rebuild_cache.py` (idempotent).
 
 ## API (all under /api, session required)
 
 - `GET /me`, `PUT /me/upi`
-- `GET /friends`, `POST /friends {mobile}`, `GET /friends/{uid}`, `DELETE /friends/{uid}` (balance must be 0)
+- `GET /friends`, `GET /friends/{uid}` (+ `/history?cursor=`), `GET /feed?cursor=`
 - `POST /expenses`, `GET|PUT|DELETE /expenses/{id}` (edit/delete: creator or payer)
 - `POST /settlements` (capped at actual debt)
-- `GET /dashboard`, `GET /insights?days=0|30|90`
+- `GET /dashboard`, `GET /insights?range=month|3m|all`
 
 ## Frontend routes
 

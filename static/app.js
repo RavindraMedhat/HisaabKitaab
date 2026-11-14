@@ -24,7 +24,7 @@ const ROUTES = [
   [/^#\/friends\/([^/?]+)$/,   (m) => viewFriend(m[1])],
   [/^#\/friends\/?$/,          viewFriends],
   [/^#\/add(?:\?(.*))?$/,      (m) => viewAddExpense(m[1])],
-  [/^#\/insights$/,           () => viewInsights(0)],
+  [/^#\/insights$/,           () => viewInsights('all')],
   [/^#\/account$/,            viewAccount],
   [/^(#\/?)?$/,               viewDashboard],
 ];
@@ -222,9 +222,10 @@ async function submitLogin(ev) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
-function actRow(item, uid, names) {
+function actRow(item, uid) {
+  const names = item.names || {};
   if (item.type === 'expense') {
-    window.__expPool[item.id] = { ...item, names };
+    window.__expPool[item.id] = item;
     return `
       <div class="tl-row tap" onclick="openExpenseDetail('${item.id}')">
         <div class="tl-ico">${catEmoji(item.description)}</div>
@@ -247,6 +248,24 @@ function actRow(item, uid, names) {
     </div>`;
 }
 
+// One "Load more" for every paged list. The cursor and next URL live on the button itself.
+const PAGERS = {};   // kind -> row builder, set by the view that owns the list
+function moreBtn(kind, url, cursor) {
+  return cursor
+    ? `<button class="btn btn-ghost" data-kind="${kind}" data-url="${url}" data-cursor="${esc(cursor)}" onclick="loadMore(this)">Load more</button>`
+    : '';
+}
+
+async function loadMore(btn) {
+  const { kind, url, cursor } = btn.dataset;
+  btn.disabled = true;
+  try {
+    const r = await api('GET', `${url}${url.includes('?') ? '&' : '?'}cursor=${encodeURIComponent(cursor)}`);
+    document.getElementById(`${kind}-list`).insertAdjacentHTML('beforeend', groupByDay(r.items, PAGERS[kind]));
+    document.getElementById(`${kind}-more`).innerHTML = moreBtn(kind, url, r.next_cursor);
+  } catch (e) { toast(e.message); btn.disabled = false; }
+}
+
 function groupByDay(items, rowFn) {
   let last = '', html = '';
   for (const it of items) {
@@ -260,12 +279,13 @@ function groupByDay(items, rowFn) {
 async function viewDashboard() {
   render(`<div class="page"><div class="page-body"><div class="empty"><div class="empty-icon">⏳</div></div></div></div>`);
   window.__expPool = {};
-  let data, friends;
-  try { [data, friends] = await Promise.all([api('GET', '/api/dashboard'), api('GET', '/api/friends')]); }
+  let data;
+  try { data = await api('GET', '/api/dashboard'); }
   catch { toast('Could not load data'); return; }
   if (!data) return;
 
-  const { net_balance, owed, owe, activity, uid, names } = data;
+  const { net_balance, owed, owe, items: activity, uid, friends, next_cursor } = data;
+  PAGERS.feed = i => actRow(i, uid);
   const first = (S.user?.name || '').split(' ')[0];
   const label = net_balance > 0.01 ? 'You are owed' : net_balance < -0.01 ? 'You owe' : 'All settled up';
   const cls   = net_balance > 0.01 ? 'hero-pos' : net_balance < -0.01 ? 'hero-neg' : '';
@@ -314,7 +334,8 @@ async function viewDashboard() {
 
       ${pending.length ? `<div class="hk-section">Balances</div><div class="hk-group">${friendRows}</div>` : ''}
 
-      ${activity.length ? `<div class="hk-section">Recent</div><div class="timeline">${groupByDay(activity, i => actRow(i, uid, names))}</div>` : ''}
+      ${activity.length ? `<div class="hk-section">Recent</div><div class="timeline" id="feed-list">${groupByDay(activity, PAGERS.feed)}</div>
+        <div id="feed-more" style="padding:.4rem 1rem 1rem">${moreBtn('feed', '/api/feed', next_cursor)}</div>` : ''}
     </div>
     ${nav('home')}
   </div>`);
@@ -394,20 +415,16 @@ async function viewFriend(fid) {
   catch (e) { toast(e.message); go('#/friends'); return; }
   if (!d) return;
 
-  const { friend, balance, expenses, settlements, uid, names } = d;
+  const { friend, balance, items, uid, next_cursor } = d;
   const fname = friend.name.split(' ')[0];
   const label = balance > 0.01 ? `${fname} owes you` : balance < -0.01 ? `You owe ${fname}` : 'You are all settled';
   const cls   = balance > 0.01 ? 'hero-pos' : balance < -0.01 ? 'hero-neg' : '';
   window.__settleData = { friend, balance, uid };
 
-  const items = [
-    ...expenses.map(e => ({ ...e, type: 'expense' })),
-    ...settlements.map(s => ({ ...s, type: 'settlement' })),
-  ].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-
   const row = it => {
     if (it.type === 'expense') {
-      window.__expPool[it.id] = { ...it, names };
+      window.__expPool[it.id] = it;
+      const names = it.names || {};
       const pd = pairDelta(it, uid, fid);
       return `
         <div class="tl-row tap" onclick="openExpenseDetail('${it.id}')">
@@ -431,6 +448,7 @@ async function viewFriend(fid) {
       </div>`;
   };
 
+  PAGERS.hist = row;
   const paying = balance < -0.01;
   const settleBtn = Math.abs(balance) > 0.01
     ? `<button class="qa qa-pay" onclick="openSettle()">${paying ? 'Pay ' + fmt(balance) : 'Received'}</button>` : '';
@@ -456,7 +474,7 @@ async function viewFriend(fid) {
       </div>
       <div class="hk-section">History</div>
       ${items.length
-        ? `<div class="timeline">${groupByDay(items, row)}</div>`
+        ? `<div class="timeline" id="hist-list">${groupByDay(items, row)}</div><div id="hist-more" style="padding:.4rem 1rem">${moreBtn('hist', `/api/friends/${fid}/history`, next_cursor)}</div>`
         : `<div class="empty" style="padding:2.5rem 1rem"><div class="empty-icon">🧾</div><div class="empty-title">Nothing yet</div><div class="empty-sub">Add a bill you shared with ${esc(fname)}.</div></div>`}
       <div style="height:5rem"></div>
     </div>
@@ -471,12 +489,6 @@ function shareBalance() {
   waOpen(balance > 0
     ? `Hey ${fn}! 🎱 You owe me ${fmt(balance)} on HisaabKitaab.${mine}`
     : `Hey ${fn}! 🎱 I owe you ${fmt(balance)} on HisaabKitaab — paying you soon.`);
-}
-
-async function removeFriend(fid) {
-  if (!confirm('Remove this friend? Your shared history stays.')) return;
-  try { await api('DELETE', `/api/friends/${fid}`); toast('Removed'); go('#/friends'); }
-  catch (e) { toast(e.message); }
 }
 
 function openSettle() {
@@ -880,15 +892,15 @@ async function submitExpense() {
 // ── Insights ──────────────────────────────────────────────────────────────
 const CAT_COLORS = { Food: '#FF8C42', Drinks: '#F15BB5', Travel: '#3D7BFF', 'Fuel & tolls': '#00A8E8', Stay: '#9B5DE5', Fun: '#FFB400', Groceries: '#00B894', Other: '#9A97B5' };
 
-async function viewInsights(days = 0) {
+async function viewInsights(range = 'all') {
   render(`<div class="page"><div class="page-body"><div class="empty"><div class="empty-icon">⏳</div></div></div></div>`);
   let d;
-  try { d = await api('GET', `/api/insights?days=${days}`); }
+  try { d = await api('GET', `/api/insights?range=${range}`); }
   catch { toast('Could not load insights'); return; }
   if (!d) return;
 
-  const tabs = [[30, 'Last 30 days'], [90, '3 months'], [0, 'All time']]
-    .map(([v, l]) => `<button class="seg-btn ${v === days ? 'on' : ''}" onclick="viewInsights(${v})">${l}</button>`).join('');
+  const tabs = [['month', 'This month'], ['3m', '3 months'], ['all', 'All time']]
+    .map(([v, l]) => `<button class="seg-btn ${v === range ? 'on' : ''}" onclick="viewInsights('${v}')">${l}</button>`).join('');
 
   const tile = (label, val, cls = '') => `<div class="tile"><div class="tile-val ${cls}">${val}</div><div class="tile-label">${label}</div></div>`;
 
@@ -924,10 +936,6 @@ async function viewInsights(days = 0) {
       ${pill(f.balance)}
     </div>`).join('');
 
-  const topRows = d.top_expenses.map(e => `
-    <div class="hk-row"><div class="tl-ico">${catEmoji(e.description)}</div>
-      <div class="flex1 trunc fw700">${esc(e.description)}</div><span class="fw800">${fmt(e.amount)}</span></div>`).join('');
-
   render(`
   <div class="page">
     <div class="hk-header"><div class="hk-title" style="font-size:1.15rem">Insights</div></div>
@@ -947,7 +955,7 @@ async function viewInsights(days = 0) {
       ${d.by_month.length > 1 ? `<div class="hk-section">Month by month</div><div class="card"><div class="cols">${months}</div></div>` : ''}
       ${d.by_tag.length ? `<div class="hk-section">Your #labels</div><div class="tag-row" style="padding:0 1rem">${tagChips}</div>` : ''}
       ${d.by_friend.length ? `<div class="hk-section">By friend</div><div class="hk-group">${friendRows}</div>` : ''}
-      ${d.top_expenses.length ? `<div class="hk-section">Biggest expenses (your share)</div><div class="hk-group">${topRows}</div>` : ''}`}
+`}
       <div style="height:2rem"></div>
     </div>
     ${nav('insights')}
