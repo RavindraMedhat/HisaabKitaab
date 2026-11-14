@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode
 
 import segno
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 router = APIRouter()
 
@@ -31,6 +31,12 @@ def _upi_uri(pa, pn, am, tn) -> str:
 def _origin(request: Request) -> str:
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     return f"{proto}://{request.headers.get('host', request.url.netloc)}"
+
+
+@router.get("/static/pay.html", include_in_schema=False)
+def old_pay_link(request: Request):
+    """Links sent by an earlier version pointed here — keep them working."""
+    return RedirectResponse("/pay?" + request.url.query, status_code=301)
 
 
 @router.get("/qr.png")
