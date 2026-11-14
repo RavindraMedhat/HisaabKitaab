@@ -308,8 +308,8 @@ async function viewDashboard() {
       ${!friends.length ? `
         <div class="empty">
           <div class="empty-icon">🎱</div>
-          <div class="empty-title">Add your first friend</div>
-          <div class="empty-sub">Add friends by mobile number, then split bills with them in seconds.</div>
+          <div class="empty-title">Waiting for the gang</div>
+          <div class="empty-sub">Everyone who signs in shows up here. Send them the invite!</div>
         </div>` : ''}
 
       ${pending.length ? `<div class="hk-section">Balances</div><div class="hk-group">${friendRows}</div>` : ''}
@@ -343,18 +343,11 @@ async function viewFriends() {
   <div class="page">
     <div class="hk-header"><div class="hk-title" style="font-size:1.15rem">Friends</div></div>
     <div class="page-body">
-      <div class="hk-section">Add a friend</div>
-      <div style="padding:0 1rem .5rem">
-        <div class="phone-field"><span>+91</span><input id="fr-mobile" type="tel" inputmode="numeric" maxlength="14" placeholder="Friend’s mobile number"></div>
-        <button class="btn btn-primary" style="margin-top:.6rem" onclick="addFriend()">Add friend</button>
-        <div class="muted" style="font-size:.8rem;margin-top:.5rem">
-          Not on HisaabKitaab yet?
-          <button class="link-btn" onclick="inviteOnWhatsApp()">Invite on WhatsApp</button>
-        </div>
-      </div>
+      <div class="hint" style="margin:.75rem 1rem 0">Everyone who signs in joins automatically. Share the app with the rest of the gang:
+        <button class="link-btn" onclick="inviteOnWhatsApp()">Invite on WhatsApp</button></div>
       ${friends.length
         ? `<div class="hk-section">Your friends</div><div class="hk-group">${rows}</div>`
-        : `<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No friends yet</div><div class="empty-sub">Add someone by their mobile number.</div></div>`}
+        : `<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No friends yet</div><div class="empty-sub">Friends appear here as soon as they sign in.</div></div>`}
     </div>
     ${nav('friends')}
   </div>`);
@@ -372,7 +365,7 @@ How to join (takes 1 minute):
 2. Enter your mobile number and choose a password
 3. Add your name (and UPI ID, so friends can pay you in one tap)
 
-Then tell me your number and I'll add you as a friend. 🙌`);
+You'll show up in my friends list automatically. 🙌`);
 }
 
 async function addFriend() {
@@ -465,7 +458,6 @@ async function viewFriend(fid) {
       ${items.length
         ? `<div class="timeline">${groupByDay(items, row)}</div>`
         : `<div class="empty" style="padding:2.5rem 1rem"><div class="empty-icon">🧾</div><div class="empty-title">Nothing yet</div><div class="empty-sub">Add a bill you shared with ${esc(fname)}.</div></div>`}
-      <div style="padding:1.5rem 1rem 0"><button class="link-btn" style="color:var(--neg)" onclick="removeFriend('${fid}')">Remove ${esc(fname)} from friends</button></div>
       <div style="height:5rem"></div>
     </div>
     ${nav('friends')}
@@ -627,9 +619,9 @@ async function viewAddExpense(queryStr) {
     <div class="page">
       <div class="hk-header"><button class="btn-back" onclick="history.back()">‹</button><div class="hk-title">Add expense</div></div>
       <div class="page-body">
-        <div class="empty"><div class="empty-icon">👥</div><div class="empty-title">Add a friend first</div>
-        <div class="empty-sub">Expenses are shared with friends you add by mobile number.</div></div>
-        <div style="padding:0 1rem"><button class="btn btn-primary" onclick="go('#/friends')">Add a friend</button></div>
+        <div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No one to split with yet</div>
+        <div class="empty-sub">Friends appear automatically once they sign in. Send them the invite.</div></div>
+        <div style="padding:0 1rem"><button class="btn btn-primary" onclick="go('#/friends')">Invite the gang</button></div>
       </div>
       ${nav('add')}
     </div>`);

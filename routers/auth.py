@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from google.cloud.firestore_v1 import ArrayUnion
 
 from services.firebase import db
 
@@ -20,6 +21,24 @@ def normalize_mobile(raw: str) -> str:
     if not re.fullmatch(r"[6-9]\d{9}", digits):
         raise HTTPException(400, "Enter a valid 10-digit mobile number")
     return digits
+
+
+def connect_everyone(me: str):
+    """Group-only app: every account is automatically friends with every other account."""
+    others = {}
+    my_friends = set()
+    for d in db.collection("users").stream():
+        data = d.to_dict() or {}
+        if d.id == me:
+            my_friends = set(data.get("friends", []))
+        else:
+            others[d.id] = set(data.get("friends", []))
+    missing = [u for u in others if u not in my_friends]
+    if missing:
+        db.collection("users").document(me).set({"friends": ArrayUnion(missing)}, merge=True)
+    for u, their in others.items():
+        if me not in their:
+            db.collection("users").document(u).set({"friends": ArrayUnion([me])}, merge=True)
 
 
 class LoginBody(BaseModel):
@@ -57,6 +76,7 @@ async def login(body: LoginBody, request: Request):
         user = {"uid": mobile, "name": name, "mobile": mobile, "upi": upi, "password": password}
         ref.set(user)
 
+    connect_everyone(mobile)
     request.session["user"] = {"uid": user["uid"], "name": user["name"], "mobile": mobile}
     return {"ok": True}
 

@@ -1,7 +1,7 @@
 # HisaabKitaab — Project Guide
 
 Splitwise-like expense splitting app for Indian friend groups (built for the "BINGO" gang).
-FastAPI + vanilla HTML/CSS/JS frontend, Firebase Firestore. No groups: you add **friends by mobile number** and split bills with them.
+FastAPI + vanilla HTML/CSS/JS frontend, Firebase Firestore. No groups: one gang. Every account is auto-friends with every other account (`connect_everyone` in routers/auth.py, runs on each login), so anyone who signs in can split with everyone.
 
 ---
 
