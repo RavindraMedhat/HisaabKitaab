@@ -28,5 +28,5 @@ def wipe(coll):
 if "--yes" not in sys.argv:
     sys.exit("Refusing to run without --yes")
 
-for name in ("users", "groups", "invites", "expenses", "settlements", "logs"):
+for name in ("users", "groups", "invites", "expenses", "settlements", "meta", "logs"):
     print(f"{name}: deleted {wipe(db.collection(name))}")
