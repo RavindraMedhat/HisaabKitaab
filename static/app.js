@@ -147,8 +147,11 @@ function upiLink(upi, name, amount, note) {
   return `upi://pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${(+amount).toFixed(2)}&cu=INR&tn=${encodeURIComponent(note)}`;
 }
 
+// WhatsApp's desktop link handoff turns 4-byte emoji (👋 🎱 🙏 …) into "�", while ₹ ✅ ✨ survive.
+// Messages below only use the safe kind; this strips anything else so a stray emoji can never show as "�".
 function waOpen(text) {
-  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  const safe = text.replace(/[\u{10000}-\u{10FFFF}\uFE0F]/gu, '').replace(/^[ \t]+|[ \t]+$/gm, '').replace(/ {2,}/g, ' ');
+  window.open('https://wa.me/?text=' + encodeURIComponent(safe), '_blank');
 }
 
 function toast(msg, ms = 2800) {
@@ -433,7 +436,7 @@ async function viewFriends() {
 function inviteOnWhatsApp() {
   const me = S.user?.name?.split(' ')[0] || 'Your friend';
   waOpen(
-`Hey! 🎱 ${me} here.
+`Hey! ${me} here ✨
 
 I'm using *HisaabKitaab* to split our bills, trips and dinners, so we can stop scrolling the group chat for who owes what.
 
@@ -442,7 +445,7 @@ How to join (takes 1 minute):
 2. Enter your mobile number and choose a password
 3. Add your name (and UPI ID, so friends can pay you in one tap)
 
-You'll show up in my friends list automatically. 🙌`);
+You'll show up in my friends list automatically. ✅`);
 }
 
 async function addFriend() {
@@ -565,11 +568,11 @@ async function sendPayRequest(otherName, amount) {
   const me = S.user;
   const link = me?.upi ? payPage(me.upi, me.name, amount, 'HisaabKitaab') : '';
   const text = link
-    ? `Hi ${fn} 👋\nQuick reminder from HisaabKitaab 🎱 — you owe me *${fmt(amount)}*.\n\n` +
-      `💸 Pay in one tap — open the link, then scan the QR or press "Pay with UPI app":\n${link}\n\n` +
-      `UPI ID: ${me.upi}\n\nOnce it's done, just send me a 👍. Thanks! 🙏`
-    : `Hi ${fn} 👋\nQuick reminder from HisaabKitaab 🎱 — you owe me *${fmt(amount)}*.\n\n` +
-      `Whenever you get a chance, please pay me by UPI or cash and send me a 👍. Thanks! 🙏`;
+    ? `Hi ${fn},\nQuick reminder from HisaabKitaab ✨ — you owe me *${fmt(amount)}*.\n\n` +
+      `Pay in one tap — open the link, then scan the QR or press "Pay with UPI app":\n${link}\n\n` +
+      `UPI ID: ${me.upi}\n\nOnce it's done, just reply ✅. Thanks!`
+    : `Hi ${fn},\nQuick reminder from HisaabKitaab ✨ — you owe me *${fmt(amount)}*.\n\n` +
+      `Whenever you get a chance, please pay me by UPI or cash and reply ✅. Thanks!`;
   if (link && navigator.canShare) {
     try {
       const blob = await (await fetch(qrPng(upiLink(me.upi, me.name, amount, 'HisaabKitaab')))).blob();
@@ -583,7 +586,7 @@ async function sendPayRequest(otherName, amount) {
 function shareBalance() {
   const { friend, balance } = window.__settleData;
   if (balance > 0) return sendPayRequest(friend.name, balance);
-  waOpen(`Hi ${friend.name.split(' ')[0]} 👋\nQuick update from HisaabKitaab 🎱 — I owe you *${fmt(balance)}*.\n\nI'll pay you soon. Thanks for waiting! 🙏`);
+  waOpen(`Hi ${friend.name.split(' ')[0]},\nQuick update from HisaabKitaab ✨ — I owe you *${fmt(balance)}*.\n\nI'll pay you soon. Thanks for waiting!`);
 }
 
 // One sheet for every payment: a direct balance with a friend, or a suggested (possibly routed) payment.
