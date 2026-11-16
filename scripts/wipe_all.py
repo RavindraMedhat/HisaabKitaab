@@ -3,8 +3,11 @@
 
 Usage:  python scripts/wipe_all.py --yes
 """
+import json
 import os
+import pickle
 import sys
+from datetime import datetime
 
 os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")
 import firebase_admin
@@ -27,6 +30,18 @@ def wipe(coll):
 
 if "--yes" not in sys.argv:
     sys.exit("Refusing to run without --yes")
+
+# Always save a full copy first (outside the repo) so a wipe can be undone with scripts/restore_backup.py
+home = os.path.expanduser("~/hisaabkitaab_backup")
+os.makedirs(home, exist_ok=True)
+copy = {c: {d.id: d.to_dict() for d in db.collection(c).stream()} for c in ("users", "expenses", "settlements", "logs")}
+stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+for ext, writer in (("pickle", lambda f: pickle.dump(copy, f)), ("json", lambda f: f.write(json.dumps(copy, indent=2, default=str)))):
+    path = f"{home}/before_wipe_{stamp}.{ext}"
+    with open(path, "wb" if ext == "pickle" else "w") as f:
+        writer(f)
+    os.chmod(path, 0o600)
+print("backup saved:", home, {k: len(v) for k, v in copy.items()})
 
 for name in ("users", "groups", "invites", "expenses", "settlements", "meta", "logs"):
     print(f"{name}: deleted {wipe(db.collection(name))}")
