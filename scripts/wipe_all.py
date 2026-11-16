@@ -19,12 +19,15 @@ db = firestore.client()
 
 
 def wipe(coll):
+    """Delete a collection and everything under it. list_documents() also returns 'placeholder' documents
+    (ones that only exist because they hold a sub-collection), which stream() would silently skip."""
     n = 0
-    for doc in coll.stream():
-        for sub in doc.reference.collections():
+    for ref in coll.list_documents():
+        for sub in ref.collections():
             n += wipe(sub)
-        doc.reference.delete()
-        n += 1
+        if ref.get().exists:
+            ref.delete()
+            n += 1
     return n
 
 
