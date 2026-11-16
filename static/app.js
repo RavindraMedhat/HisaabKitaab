@@ -29,7 +29,11 @@ const ROUTES = [
   [/^(#\/?)?$/,               viewDashboard],
 ];
 
+let lastLoad = Date.now();
+const REFRESHABLE = /^(#\/?|#\/friends(\/[^/?]+)?|#\/insights)$/;
+
 function route() {
+  lastLoad = Date.now();
   const h = location.hash || '#/';
   for (const [re, fn] of ROUTES) {
     const m = h.match(re);
@@ -40,6 +44,24 @@ function route() {
 
 function go(hash) { location.hash = hash; }
 window.addEventListener('hashchange', route);
+
+const REFRESH_BTN = `<button class="btn-more" onclick="route()" title="Refresh" aria-label="Refresh">↻</button>`;
+
+function maskUpi(u) {
+  const [name, bank] = String(u || '').split('@');
+  return name ? name.slice(0, 2) + '•••@' + (bank || '') : '';
+}
+
+// Eye button: a password field flips type; the UPI field flips a CSS mask (so it stays a normal text input)
+function togglePw(id, btn) {
+  const el = document.getElementById(id);
+  const isPw = el.dataset.kind === 'pw';
+  const hidden = isPw ? el.type === 'password' : el.classList.contains('masked');
+  if (isPw) el.type = hidden ? 'text' : 'password';
+  else el.classList.toggle('masked', !hidden);
+  btn.textContent = hidden ? '🙈' : '👁';
+  btn.setAttribute('aria-label', hidden ? 'Hide' : 'Show');
+}
 
 // ── DOM helpers ───────────────────────────────────────────────────────────
 const app = () => document.getElementById('app');
@@ -172,7 +194,7 @@ function viewLogin() {
         <label class="form-label">Mobile number</label>
         <div class="phone-field"><span>+91</span><input id="lg-mobile" type="tel" inputmode="numeric" maxlength="14" placeholder="98765 43210" autocomplete="tel" autofocus></div>
         <label class="form-label" style="margin-top:.7rem">Password</label>
-        <input id="lg-pass" class="form-input" type="password" maxlength="64" placeholder="Your password" autocomplete="current-password">
+        <div class="pw-field"><input id="lg-pass" class="form-input" type="password" data-kind="pw" maxlength="64" placeholder="Your password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw('lg-pass', this)" aria-label="Show">👁</button></div>
         <div id="lg-new" hidden>
           <div class="hint" style="margin:.8rem 0">New here — pick a password above and tell us your name so friends recognise you.</div>
           <label class="form-label">Your name</label>
@@ -222,6 +244,26 @@ async function submitLogin(ev) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
+// The plan can hold several pieces for the same person (a direct part and a routed part) — show ONE row per person
+function mergePlan(plan) {
+  const byPair = new Map();
+  for (const t of plan) {
+    const key = t.from_uid + '>' + t.to_uid;
+    const m = byPair.get(key) || { ...t, amount: 0, notes: [] };
+    m.amount = Math.round((m.amount + t.amount) * 100) / 100;
+    if (t.via.length) m.notes.push({ amount: t.amount, via: t.via });
+    byPair.set(key, m);
+  }
+  return [...byPair.values()];
+}
+
+// "₹200 of this clears what you owe Dev" lines
+function planNotes(t, paying) {
+  return t.notes.map(n => paying
+    ? `${fmt(n.amount)} of this also clears what you owe ${n.via.join(', ')}`
+    : `${fmt(n.amount)} of this also clears what ${n.via.join(', ')} owes you`);
+}
+
 function actRow(item, uid) {
   const names = item.names || {};
   if (item.type === 'expense') {
@@ -285,7 +327,8 @@ async function viewDashboard() {
   if (!data) return;
 
   const { net_balance, owed, owe, items: activity, uid, friends, next_cursor, plan } = data;
-  window.__plan = plan;
+  const merged = mergePlan(plan);
+  window.__plan = merged;
   PAGERS.feed = i => actRow(i, uid);
   const first = (S.user?.name || '').split(' ')[0];
   const label = net_balance > 0.01 ? 'You are owed' : net_balance < -0.01 ? 'You owe' : 'All settled up';
@@ -310,6 +353,7 @@ async function viewDashboard() {
         <div class="muted" style="font-size:.75rem;font-weight:600">Welcome back</div>
         <div class="hk-title">${esc(first)} 👋</div>
       </div>
+      ${REFRESH_BTN}
       ${av(S.user?.name)}
     </div>
     <div class="page-body">
@@ -333,13 +377,13 @@ async function viewDashboard() {
           <div class="empty-sub">Everyone who signs in shows up here. Send them the invite!</div>
         </div>` : ''}
 
-      ${plan.length ? `<div class="hk-section">Suggested payments</div><div class="hk-group" style="padding:.1rem 1rem">${plan.map((t, i) => {
+      ${merged.length ? `<div class="hk-section">Suggested payments</div><div class="hk-group" style="padding:.1rem 1rem">${merged.map((t, i) => {
         const paying = t.from_uid === uid, o = paying ? t.to : t.from;
         return `<div class="settle-row">${av(o.name)}
           <div class="flex1" style="min-width:0">
             <div class="trunc" style="font-size:.93rem">${paying ? 'Pay' : ''} <strong>${esc(o.name)}</strong>${paying ? '' : ' pays you'}</div>
             <div class="amt ${paying ? 'neg' : 'pos'}">${fmt(t.amount)}</div>
-            ${t.via.length ? `<div class="muted" style="font-size:.74rem">${paying ? 'also clears what you owe' : 'also clears what'} ${esc(t.via.join(', '))}${paying ? '' : ' owes you'}</div>` : ''}
+            ${planNotes(t, paying).map(n => `<div class="muted" style="font-size:.74rem">${esc(n)}</div>`).join('')}
           </div>
           <button class="settle-btn ${paying ? '' : 'settle-btn-alt'}" onclick="openPlan(${i})">${paying ? 'Pay' : 'Received'}</button></div>`;
       }).join('')}</div>` : ''}
@@ -374,7 +418,7 @@ async function viewFriends() {
 
   render(`
   <div class="page">
-    <div class="hk-header"><div class="hk-title" style="font-size:1.15rem">Friends</div></div>
+    <div class="hk-header"><div class="hk-title flex1" style="font-size:1.15rem">Friends</div>${REFRESH_BTN}</div>
     <div class="page-body">
       <div class="hint" style="margin:.75rem 1rem 0">Everyone who signs in joins automatically. Share the app with the rest of the gang:
         <button class="link-btn" onclick="inviteOnWhatsApp()">Invite on WhatsApp</button></div>
@@ -470,6 +514,7 @@ async function viewFriend(fid) {
     <div class="hk-header">
       <button class="btn-back" onclick="go('#/friends')">‹</button>
       <div class="flex1" style="min-width:0"><div class="hk-title trunc" style="font-size:1.05rem">${esc(friend.name)}</div></div>
+      ${REFRESH_BTN}
       ${av(friend.name)}
     </div>
     <div class="page-body">
@@ -477,10 +522,10 @@ async function viewFriend(fid) {
         <div class="hero-label">${label}</div>
         <div class="hero-amt">${Math.abs(balance) < 0.01 ? '₹0' : fmt(balance)}</div>
         <div class="hero-foot"><div class="hero-members" style="margin:0">+91 ${esc(friend.mobile)}</div>
-        <div class="hero-total">${friend.upi ? esc(friend.upi) : 'no UPI ID yet'}</div></div>
+        <div class="hero-total">${friend.upi ? `<span class="tap" title="Tap to show" onclick="this.textContent=this.dataset.v" data-v="${esc(friend.upi)}">${esc(maskUpi(friend.upi))} 👁</span>` : 'no UPI ID yet'}</div></div>
       </div>
       <div class="quick-actions">
-        <button class="qa" onclick="go('#/add?friend=${fid}')"><span>＋</span>Add expense</button>
+        <button class="qa" onclick="go('#/add?friend=${fid}')"><span>＋</span>Expense</button>
         ${settleBtn}
         ${balance !== 0 ? `<button class="qa qa-wa" onclick="shareBalance()"><span>↗</span>WhatsApp</button>` : ''}
       </div>
@@ -544,17 +589,13 @@ function shareBalance() {
 // One sheet for every payment: a direct balance with a friend, or a suggested (possibly routed) payment.
 // opts: { other:{uid,name,upi}, paying, amount, plan, via:[names], onDone }
 function openPayment(opts) {
-  const { other, paying, amount, plan, via = [], onDone } = opts;
+  const { other, paying, amount, plan, notes = [], onDone } = opts;
   const me = S.user;
   const fn = other.name.split(' ')[0];
   const note = 'HisaabKitaab settle up';
 
   let extra = '';
-  if (plan && via.length) {
-    extra += `<div class="hint">${paying
-      ? `Paying ${esc(fn)} directly also clears what you owe ${esc(via.join(', '))}.`
-      : `${esc(fn)} pays you directly, which also clears what ${esc(via.join(', '))} owes you.`}</div>`;
-  }
+  if (plan && notes.length) extra += `<div class="hint">${notes.map(esc).join('<br>')}</div>`;
   if (paying && other.upi) {
     extra += `
       <a class="btn btn-upi" id="upi-pay" href="${esc(upiLink(other.upi, other.name, amount, note))}">Pay ${fmt(amount)} with UPI</a>
@@ -639,7 +680,7 @@ function openSettle() {
 function openPlan(i) {
   const t = window.__plan[i];
   const paying = t.from_uid === S.user.uid;
-  openPayment({ other: paying ? t.to : t.from, paying, amount: t.amount, plan: true, via: t.via, onDone: viewDashboard });
+  openPayment({ other: paying ? t.to : t.from, paying, amount: t.amount, plan: true, notes: planNotes(t, paying), onDone: viewDashboard });
 }
 
 // ── Expense detail ────────────────────────────────────────────────────────
@@ -652,7 +693,7 @@ function openExpenseDetail(eid) {
   const ids = Object.keys(sh);
   const nameOf = id => id === uid ? 'You' : (names[id] || id);
   const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-  const canEdit = e.created_by === uid || e.paid_by === uid;
+  const canEdit = true;   // anyone involved can fix a mistake
 
   const splitRows = ids.map(u => `
     <div class="hk-row" style="padding:.55rem 1rem">
@@ -1019,7 +1060,7 @@ async function viewInsights(range = 'month') {
 
   render(`
   <div class="page">
-    <div class="hk-header"><div class="hk-title" style="font-size:1.15rem">Insights</div></div>
+    <div class="hk-header"><div class="hk-title flex1" style="font-size:1.15rem">Insights</div>${REFRESH_BTN}</div>
     <div class="page-body">
       <div style="padding:.75rem 1rem 0"><div class="seg">${tabs}</div></div>
       ${!d.expense_count ? `<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">Nothing to analyse yet</div><div class="empty-sub">Add some expenses and your spending patterns will show up here.</div></div>` : `
@@ -1068,10 +1109,17 @@ function viewAccount() {
         </div>
       </div>
 
+      <div class="hk-section">Your name</div>
+      <div class="hk-group" style="padding:.9rem 1rem">
+        <input id="acc-name" class="form-input" maxlength="40" value="${esc(u.name)}" autocomplete="name">
+        <div class="muted" style="font-size:.8rem;margin:.4rem 0 .7rem">This is how friends see you, everywhere in the app.</div>
+        <button class="btn btn-primary" onclick="saveName()">Save name</button>
+      </div>
+
       <div class="hk-section">Get paid faster</div>
       <div class="hk-group" style="padding:.9rem 1rem">
         <label class="form-label">Your UPI ID</label>
-        <input id="upi-id" class="form-input" placeholder="name@oksbi" value="${esc(u.upi || '')}" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="pw-field"><input id="upi-id" class="form-input masked" placeholder="name@oksbi" value="${esc(u.upi || '')}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off"><button type="button" class="pw-eye" onclick="togglePw('upi-id', this)" aria-label="Show">👁</button></div>
         <div class="muted" style="font-size:.8rem;margin:.4rem 0 .7rem">Friends who owe you will see a one-tap “Pay with UPI” button that opens GPay, PhonePe or Paytm with the amount filled in.</div>
         <button class="btn btn-primary" onclick="saveUpi()">Save UPI ID</button>
       </div>
@@ -1094,6 +1142,16 @@ function viewAccount() {
     </div>
     ${nav('account')}
   </div>`);
+}
+
+async function saveName() {
+  const name = document.getElementById('acc-name').value;
+  try {
+    const r = await api('PUT', '/api/me/name', { name });
+    S.user.name = r.name;
+    toast('Name saved ✓');
+    viewAccount();
+  } catch (e) { toast(e.message); }
 }
 
 async function saveUpi() {
@@ -1120,5 +1178,20 @@ async function init() {
     viewLogin();
   }
 }
+
+// Pick up other people's entries without a manual reload: when you come back to the app, and on pull-down
+const busy = () => document.querySelector('.modal-overlay');
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && REFRESHABLE.test(location.hash || '#/') && Date.now() - lastLoad > 20000 && !busy()) route();
+});
+let pull = null;
+document.addEventListener('touchstart', e => {
+  const body = e.target.closest?.('.page-body');
+  pull = body && body.scrollTop === 0 && REFRESHABLE.test(location.hash || '#/') ? e.touches[0].clientY : null;
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  if (pull !== null && e.changedTouches[0].clientY - pull > 90 && !busy()) { toast('Refreshing…', 900); route(); }
+  pull = null;
+}, { passive: true });
 
 document.addEventListener('DOMContentLoaded', init);

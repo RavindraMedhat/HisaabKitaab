@@ -804,7 +804,7 @@ html, body { font-family: var(--font-body); }
 .quick-actions { display: flex; gap: .6rem; padding: .75rem 1rem 0; }
 .qa {
   flex: 1; display: flex; align-items: center; justify-content: center; gap: .45rem;
-  padding: .75rem .5rem; border-radius: 14px; border: none; cursor: pointer;
+  padding: .75rem .5rem; border-radius: 14px; border: none; cursor: pointer; white-space: nowrap;
   background: var(--brand); color: #fff; font: 700 .9rem var(--font-body);
 }
 .qa span { font-size: 1.1rem; line-height: 1; }
@@ -933,3 +933,10 @@ html, body { font-family: var(--font-body); }
 .qr-box { text-align: center; margin: .6rem 0; }
 .qr-box img { width: 220px; height: 220px; image-rendering: pixelated; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
 .qr-box[hidden] { display: none; }
+
+/* Show / hide eye on password and UPI fields */
+.pw-field { position: relative; }
+.pw-field .form-input { padding-right: 3rem; }
+.pw-eye { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); border: none; background: none; font-size: 1.15rem; padding: .45rem .6rem; cursor: pointer; }
+.masked { -webkit-text-security: disc; text-security: disc; }
+.btn-more[title="Refresh"] { font-size: 1.25rem; font-weight: 700; }

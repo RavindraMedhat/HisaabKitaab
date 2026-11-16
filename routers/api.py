@@ -47,6 +47,19 @@ def _tags(*texts) -> list:
     return seen[:8]
 
 
+def _fresh(items: list) -> list:
+    """Names are stored inside old entries; show each person's CURRENT name instead."""
+    users = all_users()
+    cur = lambda u, fallback="": users.get(u, {}).get("name", fallback)
+    for it in items:
+        if "names" in it:
+            it["names"] = {u: cur(u, n) for u, n in it["names"].items()}
+        if it.get("type") == "settlement":
+            it["from_name"] = cur(it.get("from_uid"), it.get("from_name", ""))
+            it["to_name"] = cur(it.get("to_uid"), it.get("to_name", ""))
+    return items
+
+
 def _lim(limit: int) -> int:
     return max(1, min(limit, 50))
 
@@ -108,6 +121,24 @@ def set_upi(body: UpiBody, request: Request):
     return {"upi": upi}
 
 
+class NameBody(BaseModel):
+    name: str
+
+
+@router.put("/me/name")
+def set_name(body: NameBody, request: Request):
+    uid  = _uid(request)
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(400, "Name cannot be empty")
+    if len(name) > 40:
+        raise HTTPException(400, "Name must be 40 characters or fewer")
+    user_ref(uid).set({"name": name}, merge=True)
+    invalidate_users()
+    request.session["user"] = {**request.session["user"], "name": name}
+    return {"name": name}
+
+
 # ── Friends (= every other user) ──────────────────────────────────────────────
 
 @router.get("/friends")
@@ -122,13 +153,13 @@ def friend_detail(fid: str, request: Request, limit: int = PAGE):
     if not friend:
         raise HTTPException(404, "Person not found")
     items, nxt = page(pair_coll(uid, fid), _lim(limit), None)
-    return {"friend": friend, "balance": friend["balance"], "items": items, "next_cursor": nxt, "uid": uid}
+    return {"friend": friend, "balance": friend["balance"], "items": _fresh(items), "next_cursor": nxt, "uid": uid}
 
 
 @router.get("/friends/{fid}/history")
 def friend_history(fid: str, request: Request, cursor: str = "", limit: int = PAGE):
     items, nxt = page(pair_coll(_uid(request), fid), _lim(limit), cursor or None)
-    return {"items": items, "next_cursor": nxt}
+    return {"items": _fresh(items), "next_cursor": nxt}
 
 
 # ── Home feed ─────────────────────────────────────────────────────────────────
@@ -136,7 +167,7 @@ def friend_history(fid: str, request: Request, cursor: str = "", limit: int = PA
 @router.get("/feed")
 def feed(request: Request, cursor: str = "", limit: int = PAGE):
     items, nxt = page(feed_coll(_uid(request)), _lim(limit), cursor or None)
-    return {"items": items, "next_cursor": nxt}
+    return {"items": _fresh(items), "next_cursor": nxt}
 
 
 @router.get("/dashboard")
@@ -147,7 +178,7 @@ def get_dashboard(request: Request):
     owed, owe = _totals(friends)
     items, nxt = page(feed_coll(uid), HOME_FEED, None)
     return {"net_balance": round(owed - owe, 2), "owed": owed, "owe": owe,
-            "friends": _sort_friends(friends), "items": items, "next_cursor": nxt, "uid": uid,
+            "friends": _sort_friends(friends), "items": _fresh(items), "next_cursor": nxt, "uid": uid,
             "plan": _my_plan(graph, uid)}
 
 
@@ -184,8 +215,6 @@ def _validate_expense(body: ExpenseBody, uid: str):
         split = list(amounts.keys())
 
     participants = list(dict.fromkeys(split + [body.paid_by]))
-    if uid not in participants:
-        raise HTTPException(400, "You must be part of the expense (as payer or in the split)")
     users = all_users()
     if any(p not in users for p in participants):
         raise HTTPException(400, "Everyone in an expense must be a member of the gang")
@@ -202,14 +231,10 @@ def _validate_expense(body: ExpenseBody, uid: str):
 
 def _load_own(eid: str, uid: str) -> dict:
     doc = db.collection("expenses").document(eid).get()
-    if not doc.exists or uid not in doc.to_dict().get("participants", []):
+    e = doc.to_dict() if doc.exists else None
+    if not e or (uid not in e.get("participants", []) and e.get("created_by") != uid):
         raise HTTPException(404, "Expense not found")
-    return doc.to_dict()
-
-
-def _check_can_change(e: dict, uid: str):
-    if e.get("created_by") != uid and e.get("paid_by") != uid:
-        raise HTTPException(403, "Only the person who added or paid for this can change it")
+    return e
 
 
 @router.post("/expenses", status_code=201)
@@ -224,7 +249,7 @@ def add_expense(body: ExpenseBody, request: Request):
 @router.get("/expenses/{eid}")
 def get_expense(eid: str, request: Request):
     uid = _uid(request)
-    e = ser({**_load_own(eid, uid), "id": eid})
+    e = _fresh([ser({**_load_own(eid, uid), "id": eid})])[0]
     return {**e, "friends": [u for k, u in all_users().items() if k != uid]}
 
 
@@ -232,7 +257,6 @@ def get_expense(eid: str, request: Request):
 def edit_expense(eid: str, body: ExpenseBody, request: Request):
     uid = _uid(request)
     old = _load_own(eid, uid)
-    _check_can_change(old, uid)
     old_wo_split = {k: v for k, v in old.items() if k != "split_amounts"}
     new = {**old_wo_split, **_validate_expense(body, uid), "updated_by": uid, "updated_at": _now()}
     ledger.apply_expense(eid, old, new)
@@ -243,7 +267,6 @@ def edit_expense(eid: str, body: ExpenseBody, request: Request):
 def delete_expense(eid: str, request: Request):
     uid = _uid(request)
     old = _load_own(eid, uid)
-    _check_can_change(old, uid)
     ledger.apply_expense(eid, old, None)
 
 

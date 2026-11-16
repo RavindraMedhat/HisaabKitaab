@@ -123,7 +123,7 @@ def _delta(fn, old, new, *args) -> dict:
 def _expense_targets(e: dict, eid: str) -> dict:
     payer = e["paid_by"]
     refs = {}
-    for p in e["participants"]:
+    for p in set(e["participants"]) | {e.get("created_by")} - {None}:     # the recorder sees it too
         refs[f"feed/{p}"] = feed_ref(p, eid)
     for q in e["participants"]:
         if q != payer:

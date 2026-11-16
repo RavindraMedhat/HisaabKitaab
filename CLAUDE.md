@@ -1,7 +1,7 @@
 # HisaabKitaab — Project Guide
 
 Splitwise-like expense splitting app for Indian friend groups (built for the "BINGO" gang).
-FastAPI + vanilla HTML/CSS/JS frontend, Firebase Firestore. No groups: one gang. Every account is auto-friends with every other account (`connect_everyone` in routers/auth.py, runs on each login), so anyone who signs in can split with everyone.
+FastAPI + vanilla HTML/CSS/JS frontend, Firebase Firestore. No groups: one gang. Friends = every other account (no stored list), so anyone who signs up can split with everyone.
 
 ---
 
@@ -67,9 +67,9 @@ Lists use cursor pagination (`next_cursor`), 15 per page. If derived data ever d
 
 ## API (all under /api, session required)
 
-- `GET /me`, `PUT /me/upi`
+- `GET /me`, `PUT /me/upi`, `PUT /me/name` (names are resolved fresh on every read, so a rename shows on old entries too)
 - `GET /friends`, `GET /friends/{uid}` (+ `/history?cursor=`), `GET /feed?cursor=`
-- `POST /expenses`, `GET|PUT|DELETE /expenses/{id}` (edit/delete: creator or payer)
+- `POST /expenses`, `GET|PUT|DELETE /expenses/{id}` (any participant — or the person who recorded it — can edit/delete; you may record an expense between other people)
 - `POST /settlements` (direct, capped at actual debt)
 - `POST /settle-plan` — pay a suggested payment; routed ones (A pays C on B's behalf) record each hop as its own settlement (A→B, B→C) atomically
 - `GET /dashboard` (includes `plan`: my suggested payments from `ledger.settle_plan`), `GET /insights?range=month|3m|all`
